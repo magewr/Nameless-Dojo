@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --rpg-bg: #18120e;
+    --rpg-panel: #2b1f17;
+    --rpg-panel-light: #3b2a1e;
+    --rpg-paper: #efe2c4;
+    --rpg-border: #8c6239;
+    --rpg-gold: #e5b75a;
+    --rpg-red: #c93b2b;
+    --rpg-ink: #1e1510;
+  }
+
+  html, body, #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'NeoDunggeunmo', 'Courier New', monospace;
+    background-color: var(--rpg-bg);
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+}
+
+.font-pixel {
+  font-family: 'NeoDunggeunmo', monospace;
+  letter-spacing: -0.01em;
+}
+
+.font-serif-kr {
+  font-family: 'NeoDunggeunmo', 'Noto Serif KR', monospace;
+}
+
+.font-sans-kr {
+  font-family: 'NeoDunggeunmo', monospace;
+}
+
+canvas.pixel-canvas {
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* 2000년대 정통 도트 RPG 목재·황금 프레임 */
+.rpg-window {
+  background: #281c14;
+  color: #f5e9ce;
+  border: 3px solid #d4a359;
+  box-shadow:
+    inset 0 0 0 2px #5c3f28,
+    0 0 0 2px #140d09,
+    0 8px 0 rgba(0, 0, 0, 0.55);
+}
+
+.rpg-paper-window {
+  background: #f2e5c6;
+  color: #241911;
+  border: 3px solid #6b4728;
+  box-shadow:
+    inset 0 0 0 2px #d8be8e,
+    0 0 0 2px #1c130c,
+    0 6px 0 rgba(0, 0, 0, 0.45);
+}
+
+.hanji-panel {
+  background: #f2e5c6;
+  color: #241911;
+  border: 3px solid #6b4728;
+  box-shadow:
+    inset 0 0 0 2px #dcc59a,
+    0 0 0 2px #1a110a,
+    0 6px 0 rgba(0, 0, 0, 0.45);
+}
+
+.rpg-btn {
+  background: #473120;
+  color: #f7ecd2;
+  border: 2px solid #c9974c;
+  box-shadow:
+    inset 0 -3px 0 #2b1c11,
+    inset 0 2px 0 #6d4d34,
+    0 2px 0 #140d09;
+  transition: transform 0.06s steps(2);
+}
+
+.rpg-btn:hover:not(:disabled) {
+  background: #5c402a;
+  color: #fff8e7;
+}
+
+.rpg-btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 0 #2b1c11;
+}
+
+.ink-button {
+  background: #3d291a;
+  color: #f7ecd2;
+  border: 2px solid #d4a359;
+  box-shadow:
+    inset 0 -3px 0 #23160d,
+    inset 0 2px 0 #63452d,
+    0 2px 0 #120b07;
+  transition: transform 0.06s steps(2);
+}
+
+.ink-button:hover:not(:disabled) {
+  background: #523723;
+}
+
+.ink-button:active:not(:disabled) {
+  transform: translateY(2px);
+}
+
+.seal-badge {
+  background: #b52b27;
+  color: #fff6e5;
+  border: 2px solid #f2b766;
+  box-shadow: 0 2px 0 #4d100e;
+}
+
+/* 도트 스타일 스크롤바 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1f150f;
+}
+::-webkit-scrollbar-thumb {
+  background: #8c6239;
+  border: 1px solid #d4a359;
+}
+
+@keyframes rpgPop {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-ink {
+  animation: rpgPop 0.16s steps(4) forwards;
+}
+
+@keyframes floatBob {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-bob {
+  animation: floatBob 0.9s steps(3) infinite;
+}

@@ -1,0 +1,491 @@
+export type CountryId = 'KOREA' | 'CHINA' | 'JAPAN';
+export type Gender = 'MALE' | 'FEMALE';
+export type Season = 'SPRING' | 'SUMMER' | 'AUTUMN' | 'WINTER';
+
+export type ScheduleActivityId =
+  | 'TRAIN'
+  | 'BODY'
+  | 'MIND'
+  | 'DECODE'
+  | 'CRAFT'
+  | 'BUILD'
+  | 'TEACH'
+  | 'ESCORT'
+  | 'REST'
+  | 'SPAR';
+
+export type BattleTactic = 'AGGRESSIVE' | 'BALANCED' | 'COUNTER';
+
+export interface ActiveCraftProject {
+  skillAId: string;
+  skillBId: string;
+  customName: string;
+  progress: number; // 0 ~ 100
+}
+
+export interface ActiveBuildProject {
+  facilityKey: keyof DojoFacilities;
+  targetLevel: number;
+  targetName: string;
+  progress: number; // 0 ~ 100
+}
+
+export interface SeasonPlan {
+  activities: ScheduleActivityId[]; // 1 ~ 4개
+  weights?: Partial<Record<ScheduleActivityId, number>>; // 각 활동 비중 (1 ~ 4)
+  trainSkillId: string;
+  decodeBookId: string;
+}
+
+export interface SeasonTickResult {
+  phase: 'EARLY' | 'MID' | 'LATE';
+  phaseLabel: string;
+  activity: ScheduleActivityId;
+  location: 'DUMMY' | 'YARD' | 'HALL' | 'LIBRARY' | 'FORGE' | 'CLINIC' | 'GATE';
+  floatingText: string;
+  floatingColor: string;
+  feedLines: Array<{ text: string; tone: 'NORMAL' | 'GOOD' | 'WARN' | 'MAGIC' }>;
+  badges?: Array<{ label: string; tone: 'GOOD' | 'WARN' | 'MAGIC' }>;
+  minorEventText?: string;
+  minorEventTone?: 'NORMAL' | 'GOOD' | 'WARN' | 'MAGIC';
+}
+
+export interface SeasonSummaryData {
+  year: number;
+  season: Season;
+  activitiesDone: ScheduleActivityId[];
+  moneyDelta: number;
+  fameDelta: number;
+  healthDelta: number;
+  statDeltas?: string[];
+  majorEvents?: string[];
+  discipleNote?: string;
+  highlights: string[];
+}
+
+export type SkillForm =
+  | 'SLASH'
+  | 'THRUST'
+  | 'STRIKE'
+  | 'GRAPPLE'
+  | 'STEP'
+  | 'PARRY'
+  | 'PROJECTILE'
+  | 'AURA';
+
+export type WeaponGroup = 'BLADE' | 'POLEARM' | 'UNARMED' | 'THROWN' | 'CATALYST' | 'ANY';
+
+export type SkillOrigin = 'NAMELESS' | 'EASTERN' | 'WESTERN' | 'EXOTIC' | 'FANTASY';
+
+export type SkillElement = 'PHYSICAL' | 'FIRE' | 'ICE' | 'LIGHTNING' | 'WIND' | 'QI' | 'SHADOW';
+
+export type TelegraphType = 'YELLOW' | 'RED' | 'BLUE' | 'NONE';
+
+export type RangeZone = 'CLOSE' | 'MID' | 'FAR' | 'ANY';
+
+export type BookRarity = 'COMMON' | 'RARE' | 'WESTERN' | 'LEGEND' | 'GRIMOIRE' | 'LEGACY';
+
+export type DisabilityType = 'ONE_ARM' | 'BLIND' | 'LIMP';
+
+export type AwakeningType = 'ONE_ARM_SAINT' | 'MIND_EYE' | 'IMMOVABLE';
+
+export interface ImprintedTrait {
+  tier: 3 | 6 | 9;
+  id: string;
+  label: string;
+  description: string;
+  effect: {
+    damageMult?: number;
+    windupMult?: number;
+    cooldownMult?: number;
+    postureMult?: number;
+    parryWindowBonus?: number;
+    counterMult?: number;
+    rangeExtend?: boolean;
+    unblockable?: boolean;
+    armorPierce?: number;
+    ignoreEvade?: boolean;
+    executeThreshold?: number;
+    qiGainOnHit?: number;
+    statusBonus?: number;
+    multiHit?: number;
+    noWeaponPenalty?: boolean;
+    // 운기 심법(패시브) 전용 각인 효과
+    passiveQiRegenBonus?: number;
+    passiveDamageReduce?: number;
+    passiveAllDamageBonus?: number;
+    passiveParryBonus?: number;
+    passiveMaxHpBonus?: number;
+    passiveHealthRegen?: number;
+  };
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  customName?: string;
+  description: string;
+  creator: string;
+  form: SkillForm;
+  weapon: WeaponGroup;
+  origin: SkillOrigin[];
+  element: SkillElement;
+  parents?: [string, string];
+  isForbidden?: boolean;
+  isDegraded?: boolean;
+  isMutated?: boolean;
+  masteryLevel: number;
+  masteryExp: number;
+  imprintedTraits: ImprintedTrait[];
+  pendingTraitTier?: 3 | 6 | 9;
+  power: number;
+  windupMs: number;
+  recoveryMs: number;
+  cooldownMs: number;
+  qiCost: number;
+  range: RangeZone;
+  telegraph: TelegraphType;
+  postureDamage?: number;
+  statusEffect?: {
+    type: 'BURN' | 'FREEZE' | 'SHOCK' | 'POISON' | 'STUN' | 'BLEED' | 'WEAKEN' | 'SHIELD' | 'SLOW';
+    chance: number;
+    value: number;
+    durationMs: number;
+  };
+  selfRecoil?: {
+    hpPercent?: number;
+    healthLoss?: number;
+    lifespanYears?: number;
+    durabilityLoss?: number;
+  };
+  isPassive?: boolean;
+}
+
+export interface Book {
+  id: string;
+  title: string;
+  rarity: BookRarity;
+  countryBias?: CountryId;
+  price: number;
+  decodeApRequired: number; // 1 = 100%, 2 = 180%, 3 = 260%
+  decodeProgress: number; // 퍼센트 단위 (0 ~ target)
+  decoded: boolean;
+  unreadableHint?: string;
+  enlightenmentText?: string;
+  requiresMasteryLv?: number;
+  requiresQi?: number;
+  requiresWil?: number;
+  skillTemplateId: string;
+  isLegacy?: boolean;
+  legacySkill?: Skill;
+}
+
+export type WeaponGrade = 'CRUDE' | 'NORMAL' | 'FINE' | 'TREASURE' | 'ARCANE';
+
+export interface Weapon {
+  id: string;
+  name: string;
+  customName?: string;
+  group: WeaponGroup;
+  grade: WeaponGrade;
+  elementAffinity?: SkillElement;
+  price: number;
+  attack: number;
+  speedBonus: number;
+  range: RangeZone;
+  postureBreak: number;
+  upgradeLevel: number;
+  durability: number;
+  maxDurability: number;
+  passiveText: string;
+  flavorText: string;
+  isHeirloom?: boolean;
+  winsCount?: number;
+  realDuelWins?: number;
+  magicCasts?: number;
+}
+
+export interface Stats {
+  str: number;
+  agi: number;
+  vit: number;
+  wil: number;
+  ins: number;
+  qi: number;
+}
+
+export interface ReputationAxes {
+  virtue: number;
+  ruthless: number;
+  commerce: number;
+  ascetic: number;
+  arcane: number;
+}
+
+export interface DojoFacilities {
+  yard: number;
+  dorm: number;
+  library: number;
+  forge: number;
+  clinic: number;
+  sanctum: number;
+}
+
+export type DiscipleRole = 'STUDENT' | 'INSTRUCTOR' | 'ESCORT' | 'HEIR';
+
+export interface GraduatedDisciple {
+  id: string;
+  name: string;
+  archetype: string;
+  graduatedYear: number;
+  graduatedAge: number;
+  loyaltyAtExit: number;
+  powerScore: number;
+  fate: 'GRANDMASTER' | 'SUCCESSFUL' | 'ORDINARY' | 'RIVAL_BETRAYER';
+  topSkillName: string;
+  revisited?: boolean;
+}
+
+export interface Disciple {
+  id: string;
+  name: string;
+  archetype: string;
+  gender?: Gender;
+  age: number;
+  isChild?: boolean;
+  childTalent?: 'PRODIGY' | 'DILIGENT' | 'SCHOLAR';
+  talentElement?: SkillElement;
+  talentWeapon?: WeaponGroup;
+  isGenius?: boolean;
+  loyalty: number;
+  ambition: number;
+  stats: Stats;
+  role: DiscipleRole;
+  skills: Skill[];
+  joinedYear: number;
+  tuition: number;
+  isSpy?: boolean;
+  dead?: boolean;
+  leftReason?: string;
+  weaponId?: string;
+}
+
+export interface Spouse {
+  id: string;
+  name: string;
+  gender?: Gender;
+  occupation: string;
+  age: number;
+  bonusType: 'CLINIC' | 'COMMERCE' | 'COMBAT' | 'SCHOLAR' | 'WESTERN' | 'LOYALTY';
+  bonusDesc: string;
+  marriedYear: number;
+  alive: boolean;
+}
+
+export interface RivalState {
+  id: string;
+  name: string;
+  title: string;
+  age: number;
+  act: 0 | 1 | 2 | 3 | 4;
+  winsAgainstPlayer: number;
+  lossesAgainstPlayer: number;
+  friendship: number;
+  alive: boolean;
+  lastFarewellType?: 'DUEL' | 'DRINK' | 'NONE';
+}
+
+export interface TemporaryStatus {
+  id: 'LIGHT_INJURY' | 'HEAVY_INJURY' | 'PLAGUE' | 'INTERNAL_INJURY';
+  label: string;
+  turnsRemaining: number;
+}
+
+export type EnemyAiType = 'AGGRESSIVE' | 'DUELIST' | 'HEAVY' | 'RUSHDOWN' | 'RANGED' | 'OLD_MASTER';
+
+export interface BattleConfig {
+  id: string;
+  title: string;
+  subtitle: string;
+  isRealDuel: boolean;
+  canUseDisciple: boolean;
+  enemyName: string;
+  enemyTitle: string;
+  enemyAge: number;
+  enemyAi: EnemyAiType;
+  enemyHp: number;
+  enemyStats: Stats;
+  enemyWeaponGroup: WeaponGroup;
+  enemySkills: Skill[];
+  rewardMoney?: number;
+  rewardFame?: number;
+  rewardBookId?: string;
+  rewardWeaponId?: string;
+  eventFollowupId?: string;
+  isRivalBattle?: boolean;
+  isTutorial?: boolean;
+  isTournament?: boolean;
+  tournamentRound?: number; // 1(256강) ~ 8(결승)
+  tournamentName?: string;
+  spectatorMode?: boolean;
+  spectatorLeft?: {
+    name: string;
+    sectName: string;
+    age: number;
+    hp: number;
+    stats: Stats;
+    skills: Skill[];
+    country: CountryId;
+    gender: Gender;
+  };
+}
+
+export interface GameEventOption {
+  id: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
+export interface SceneDialogueLine {
+  speaker: string;
+  role: 'HERO' | 'NPC' | 'NARRATOR';
+  stageDirection?: string; // 예: (칼자루를 천천히 고쳐 쥐며)
+  text: string;
+  emote?: '!' | '?' | 'ANGRY' | 'HEART';
+}
+
+export interface ActiveEvent {
+  id: string;
+  title: string;
+  category: 'HISTORICAL' | 'LIFE' | 'DUEL' | 'FANTASY' | 'RIVAL' | 'FAMILY' | 'ONBOARDING' | 'DEBT';
+  sceneActor?: 'ENEMY' | 'RIVAL' | 'DISCIPLE' | 'SPOUSE' | 'MERCHANT';
+  narration: string;
+  speaker?: string;
+  dialogue?: string;
+  script?: SceneDialogueLine[];
+  outcomeScripts?: Record<string, SceneDialogueLine[]>; // 선택지별 여운 있는 2~3마디 결말 대사!
+  options: GameEventOption[];
+  meta?: Record<string, unknown>;
+}
+
+export interface LogEntry {
+  id: string;
+  year: number;
+  season: Season;
+  text: string;
+  type: 'NORMAL' | 'GOOD' | 'WARN' | 'DANGER' | 'MAGIC' | 'RUMOR';
+}
+
+export interface MerchantOffer {
+  books: Book[];
+  weapons: Weapon[];
+  greeting: string;
+  hasGrimoire: boolean;
+  hasLegacy: boolean;
+}
+
+export interface LegacyRecord {
+  id: string;
+  savedAt: string;
+  country: CountryId;
+  founderName: string;
+  sectName: string;
+  finalTitle: string;
+  deathYear: number;
+  deathAge: number;
+  deathCause: string;
+  fame: number;
+  usedMagic: boolean;
+  signatureSkill?: Skill;
+  heirloomWeapon?: Weapon;
+  endingTitle: string;
+}
+
+export type ScreenPhase = 'TITLE' | 'CREATE' | 'PROLOGUE' | 'MAIN' | 'BATTLE' | 'ENDING';
+
+export interface GameState {
+  phase: ScreenPhase;
+  country: CountryId;
+  gender: Gender;
+  name: string;
+  sectName: string;
+  sectNamed: boolean;
+  year: number;
+  season: Season;
+  turn: number;
+  age: number;
+  startAge: number;
+  health: number;
+  maxLifespanPenalty: number;
+  ap: number;
+  maxAp: number;
+  money: number;
+  debt: number;
+  debtTurns: number;
+  fame: number;
+  authority: number;
+  signboardStolen: boolean;
+  stats: Stats;
+  reputation: ReputationAxes;
+  currentTitle: string;
+  facilities: DojoFacilities;
+  skills: Skill[];
+  equippedActiveIds: string[];
+  equippedPassiveIds: string[];
+  books: Book[];
+  weapons: Weapon[];
+  equippedWeaponId: string;
+  disciples: Disciple[];
+  graduatedDisciples?: GraduatedDisciple[];
+  taughtSkillIds: string[];
+  spouse: Spouse | null;
+  rival: RivalState;
+  statuses: TemporaryStatus[];
+  disabilities: DisabilityType[];
+  awakenings: AwakeningType[];
+  disabilityProgress: {
+    oneArmRealWins: number;
+    blindParries: number;
+    limpCounterWins: number;
+  };
+  // v3.0 계절 계획 & 진행 프로젝트
+  seasonPlan: SeasonPlan;
+  activeCraft: ActiveCraftProject | null;
+  activeBuild: ActiveBuildProject | null;
+  battleTactic: BattleTactic;
+  lastSeasonSummary: SeasonSummaryData | null;
+  flags: {
+    usedMagicPublicly: boolean;
+    magicCastCount: number;
+    forbiddenCastCount: number;
+    realDuelWins: number;
+    realDuelKills: number;
+    wroteManual: boolean;
+    royalAlliance: boolean;
+    westernFear: boolean;
+    rivalFarewellDone: boolean;
+    heirConflictDone: boolean;
+    triggeredEvents: string[];
+    recentEventBases?: string[]; // 최근 발동 이벤트 계열 기록 (중복 도배 방지!)
+    minorEventIdsSeen: string[];
+    storyMemory: Record<string, string>; // 사소한 NPC·과거 선택의 장기 인과 기억!
+    tutorialDone?: boolean;
+    grandmasterWins?: number;
+    tournamentWins?: number;
+    maxParriesInBattle?: number;
+    merchantVisits: number;
+    hasMetMerchant: boolean;
+    hasHadFirstDisciple: boolean;
+    hasCraftedOnce: boolean;
+    debtDeadlinePassed: boolean;
+    sparringWins: number;
+  };
+  logs: LogEntry[];
+  activeEvent: ActiveEvent | null;
+  pendingBattle: BattleConfig | null;
+  merchantOffer: MerchantOffer | null;
+  pendingTraitSkillId: string | null;
+  deathCause: string | null;
+}
