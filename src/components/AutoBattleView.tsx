@@ -11,7 +11,18 @@ import {
   getVfxGridSheet,
   loadRawImage,
   preloadAllGameArt,
+  VFX_SHEETS,
 } from '../pixel/spriteLoader';
+import {
+  createDarkFlurry,
+  createKoOneStroke,
+  DarkFlurryState,
+  drawSmoothVfxSprite,
+  KoOneStrokeState,
+  renderDarkFlurry,
+  renderKoOneStroke,
+  SEQ_8F,
+} from '../pixel/katanaVfxRenderer';
 import { detectNpcGender, PixelPortrait } from './PixelPortrait';
 import { HANJA_GLOSSARY, InGameTooltip } from './InGameUI';
 import { TOURNAMENT_ROUNDS } from '../data/tournament';
@@ -34,6 +45,39 @@ interface Particle {
   color: string;
   size: number;
   gravity?: number;
+  kind?: 'PIXEL' | 'SPARK' | 'INK';
+}
+
+interface BladeArcEffect {
+  x: number;
+  y: number;
+  radius: number;
+  startAngle: number;
+  endAngle: number;
+  thickness: number;
+  color: string;
+  life: number;
+  maxLife: number;
+}
+
+interface CrossFlareEffect {
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+  rotation: number;
+  life: number;
+  maxLife: number;
+}
+
+interface GroundCrackEffect {
+  x: number;
+  y: number;
+  scale: number;
+  color: string;
+  branches: Array<{ angle: number; len: number; bend: number }>;
+  life: number;
+  maxLife: number;
 }
 
 interface FloatingText {
@@ -62,7 +106,9 @@ interface ActiveVfxSprite {
   y: number;
   vx: number;
   vy: number;
-  vfxIdx: number; // grid_vfx_martial_8f 인덱스 (0~7)
+  sheetSrc: string;
+  vfxIdx: number;
+  frameSeq?: number[]; // 4프레임 연속 애니메이션 시퀀스!
   scale: number;
   flipX: number;
   rotation: number;
@@ -336,9 +382,14 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
   const ghostsRef = useRef<AfterimageGhost[]>([]);
   const vfxSpritesRef = useRef<ActiveVfxSprite[]>([]);
   const slashLinesRef = useRef<SlashLineEffect[]>([]);
+  const bladeArcsRef = useRef<BladeArcEffect[]>([]);
+  const flaresRef = useRef<CrossFlareEffect[]>([]);
+  const cracksRef = useRef<GroundCrackEffect[]>([]);
   const ringsRef = useRef<ShockRing[]>([]);
   const magicFxRef = useRef<MagicPillarFx[]>([]);
   const darkSlashRef = useRef<DarkSlashSequence | null>(null);
+  const darkFlurryRef = useRef<DarkFlurryState | null>(null);
+  const koStrokeRef = useRef<KoOneStrokeState | null>(null);
   const wavesRef = useRef<ProjectileWave[]>([]);
 
   const metaRef = useRef({
@@ -517,9 +568,14 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
     ghostsRef.current = [];
     vfxSpritesRef.current = [];
     slashLinesRef.current = [];
+    bladeArcsRef.current = [];
+    flaresRef.current = [];
+    cracksRef.current = [];
     ringsRef.current = [];
     magicFxRef.current = [];
     darkSlashRef.current = null;
+    darkFlurryRef.current = null;
+    koStrokeRef.current = null;
     wavesRef.current = [];
 
     metaRef.current = {
@@ -604,6 +660,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
     const heroNativeDir = heroInfo.nativeDir;
     const enemyGridSrc = getEnemyFightGridSrc(battle.enemyName, battle.enemyTitle, battle.enemyWeaponGroup);
 
+    const panAt = (x: number) => Math.max(-0.78, Math.min(0.78, (x - CANVAS_W / 2) / (CANVAS_W / 2)));
+
     const spawnParticles = (x: number, y: number, color: string, count: number, spread = 6.5, gravity = 0.16) => {
       for (let i = 0; i < count; i++) {
         const ang = Math.random() * Math.PI * 2;
@@ -618,8 +676,121 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           color,
           size: 3 + Math.floor(Math.random() * 3) * 2,
           gravity,
+          kind: 'PIXEL',
         });
       }
+    };
+
+    // 방향성 쇠불꽃 스파크 스트릭 (패링·강타 시 속도 방향으로 길게 뻗는 빛줄기!)
+    const spawnSparks = (x: number, y: number, color: string, count: number, speed = 11) => {
+      for (let i = 0; i < count; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = speed * (0.45 + Math.random() * 0.85);
+        particlesRef.current.push({
+          x,
+          y,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd - 2.2,
+          life: 0.22 + Math.random() * 0.24,
+          maxLife: 0.46,
+          color: i % 3 === 0 ? '#ffffff' : color,
+          size: 2 + Math.random() * 2,
+          gravity: 0.24,
+          kind: 'SPARK',
+        });
+      }
+    };
+
+    // 동양 수묵 먹물 튐 (고티어·카운터·체세붕괴·KO 시 흩뿌려지는 먹물 방울!)
+    const spawnInkSplatter = (x: number, y: number, facing: number, count = 12, accentColor?: string) => {
+      for (let i = 0; i < count; i++) {
+        const spreadAng = (Math.random() - 0.5) * 1.45;
+        const dirAng = (facing >= 0 ? 0 : Math.PI) + spreadAng;
+        const spd = 3.5 + Math.random() * 8.5;
+        particlesRef.current.push({
+          x,
+          y: y + (Math.random() - 0.5) * 32,
+          vx: Math.cos(dirAng) * spd,
+          vy: Math.sin(dirAng) * spd - 1.5,
+          life: 0.35 + Math.random() * 0.32,
+          maxLife: 0.67,
+          color: i % 4 === 0 && accentColor ? accentColor : '#120d0a',
+          size: 4 + Math.random() * 6,
+          gravity: 0.14,
+          kind: 'INK',
+        });
+      }
+    };
+
+    // ★ 32비트 픽셀아트 VFX 스프라이트 시트 전용 스포너 (코드 도형 대체!) ★
+    const spawnVfxAnim = (opts: {
+      x: number;
+      y: number;
+      sheetSrc: string;
+      frameSeq: number[];
+      scale?: number;
+      flipX?: number;
+      rotation?: number;
+      duration?: number;
+      vx?: number;
+      vy?: number;
+    }) => {
+      const dur = opts.duration ?? 0.42;
+      vfxSpritesRef.current.push({
+        x: opts.x,
+        y: opts.y,
+        vx: opts.vx ?? 0,
+        vy: opts.vy ?? 0,
+        sheetSrc: opts.sheetSrc,
+        vfxIdx: opts.frameSeq[0] ?? 0,
+        frameSeq: opts.frameSeq,
+        scale: opts.scale ?? 1.2,
+        flipX: opts.flipX ?? 1,
+        rotation: opts.rotation ?? 0,
+        life: dur,
+        maxLife: dur,
+      });
+    };
+
+    // 초승달/대참격/일섬 픽셀 스프라이트 검궤
+    const spawnBladeArc = (x: number, y: number, facing: number, _color: string, radius: number, _thickness: number, reverse = false) => {
+      const idx = radius >= 95 ? 2 : radius >= 80 ? 1 : 0;
+      spawnVfxAnim({
+        x,
+        y,
+        sheetSrc: VFX_SHEETS.SLASH_PARRY,
+        frameSeq: [idx],
+        scale: 0.95 + Math.min(0.65, (radius - 60) / 80),
+        flipX: facing,
+        rotation: reverse ? 0.35 * facing : 0,
+        duration: 0.28,
+        vx: facing * 24,
+      });
+    };
+
+    // 4방향 십자 별빛 섬광 픽셀 스프라이트 (간파·강타·KO!)
+    const spawnCrossFlare = (x: number, y: number, size: number, _color: string) => {
+      const isHuge = size >= 95;
+      spawnVfxAnim({
+        x,
+        y,
+        sheetSrc: isHuge ? VFX_SHEETS.QI_FINISHER : VFX_SHEETS.SLASH_PARRY,
+        frameSeq: isHuge ? [5, 6, 7] : [4],
+        scale: Math.max(0.85, size / 72),
+        duration: isHuge ? 0.46 : 0.3,
+      });
+    };
+
+    // 발밑 지면 균열 암석 폭발 픽셀 스프라이트
+    const spawnGroundCrack = (x: number, scale = 1.0, _color = '#fbbf24') => {
+      spawnVfxAnim({
+        x,
+        y: GROUND_Y - 46,
+        sheetSrc: VFX_SHEETS.SLASH_PARRY,
+        frameSeq: [7],
+        scale: 1.05 * scale,
+        duration: 0.48,
+      });
     };
 
     const spawnDust = (x: number, facing: number) => {
@@ -728,6 +899,11 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       if (def.posture <= 0) {
         def.groggyUntil = now + 1350;
         def.posture = def.maxPosture;
+        sound.playGuardBreak(panAt(def.x));
+        // 체세 붕괴 산산조각 방패 파편 + 지면 균열 암석 폭발 스프라이트!
+        spawnVfxAnim({ x: def.x, y: 248, sheetSrc: VFX_SHEETS.SLASH_PARRY, frameSeq: [6], scale: 1.35, duration: 0.44 });
+        spawnGroundCrack(def.x, 1.25, '#fb923c');
+        spawnSparks(def.x, 250, '#fb923c', 16, 12);
         floatsRef.current.push({ x: def.x, y: 145, text: '체세 붕괴!', color: '#fb923c', life: 0.9, maxLife: 0.9, scale: 1.25 });
       }
 
@@ -739,72 +915,86 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         metaRef.current.inkFlashUntil = now + 130;
       }
 
-      // 32비트 VFX 스프라이트 + 참격선 + 충격파 링! (맨손 무술가/권법은 검기 대신 충격파 링으로 개연성 100%!)
+      // ★ 32비트 8프레임 초매끄러운 픽셀아트 VFX 스프라이트 타격 연출! ★
       const attackerIsUnarmed =
         (atkIsP ? heroGridSrc.includes('unarmed') : enemyGridSrc.includes('unarmed')) ||
         sk.weapon === 'UNARMED' ||
         sk.form === 'STRIKE' ||
         sk.form === 'GRAPPLE';
-      const resolvedVfx1 = attackerIsUnarmed && (prof.vfxIdx === 0 || prof.vfxIdx === 1) ? 3 : prof.vfxIdx;
-      const secondVfxIdx = attackerIsUnarmed ? 3 : resolvedVfx1 === 0 ? 1 : resolvedVfx1;
-      vfxSpritesRef.current.push({
-        x: def.x - facing * 14,
-        y: 258 + (isSecondHit ? 10 : 0),
-        vx: facing * 28,
-        vy: 0,
-        vfxIdx: isSecondHit ? secondVfxIdx : resolvedVfx1,
-        scale: prof.scale * (isSecondHit ? 0.92 : 1.0),
-        flipX: facing,
-        rotation: 0,
-        life: 0.28 + prof.tier * 0.04,
-        maxLife: 0.28 + prof.tier * 0.04,
-      });
 
-      // 고레벨/카운터/처형 전용 대각선 일섬선(Iai Slash Line)
+      if (attackerIsUnarmed) {
+        spawnVfxAnim({
+          x: def.x - facing * 12,
+          y: 254 + (isSecondHit ? 10 : 0),
+          vx: facing * 22,
+          sheetSrc: VFX_SHEETS.SLASH_PARRY,
+          frameSeq: [3],
+          scale: prof.scale * 1.15,
+          flipX: facing,
+          duration: 0.28,
+        });
+      } else if (isCounterRiposte || prof.isExecute || prof.tier >= 4) {
+        // 필살/반격/고티어: 8프레임 초승달 대참격 + 진홍 일섬 교차!
+        spawnVfxAnim({
+          x: def.x - facing * 12,
+          y: 252 + (isSecondHit ? 10 : 0),
+          vx: facing * 30,
+          sheetSrc: VFX_SHEETS.SLASH_8F,
+          frameSeq: SEQ_8F,
+          scale: prof.scale * 1.18,
+          flipX: facing,
+          rotation: isSecondHit ? 0.35 * facing : 0,
+          duration: 0.28,
+        });
+        spawnVfxAnim({
+          x: def.x,
+          y: 252,
+          sheetSrc: VFX_SHEETS.SLASH_PARRY,
+          frameSeq: [2],
+          scale: prof.scale * 1.12,
+          flipX: facing,
+          duration: 0.24,
+        });
+      } else {
+        // 일반/중급 도검 참격: 8프레임 초승달 대참격 초고속 30fps!
+        spawnVfxAnim({
+          x: def.x - facing * 14,
+          y: 254 + (isSecondHit ? 10 : 0),
+          vx: facing * 28,
+          sheetSrc: VFX_SHEETS.SLASH_8F,
+          frameSeq: SEQ_8F,
+          scale: prof.scale * 1.08 * (isSecondHit ? 0.92 : 1.0),
+          flipX: facing,
+          rotation: isSecondHit ? 0.38 * facing : 0,
+          duration: 0.26,
+        });
+      }
+
+      // 고레벨/카운터/처형 시 추가 별빛 섬광 & 지면 균열 스프라이트!
       if (prof.tier >= 3 || isCounterRiposte || prof.isExecute) {
-        slashLinesRef.current.push({
-          x1: def.x - facing * 115,
-          y1: isSecondHit ? 315 : 195,
-          x2: def.x + facing * 125,
-          y2: isSecondHit ? 205 : 305,
-          color: prof.isExecute ? '#ef4444' : isCounterRiposte ? '#fde047' : prof.color,
-          width: prof.tier >= 4 || isCounterRiposte ? 7 : 4,
-          life: 0.24,
-          maxLife: 0.24,
-        });
+        spawnCrossFlare(def.x, 252, isCounterRiposte ? 102 : prof.tier >= 4 ? 86 : 64, isCounterRiposte ? '#fde047' : prof.color);
+        spawnInkSplatter(def.x, 256, facing, isCounterRiposte ? 16 : 10, prof.color);
       }
 
-      if (prof.isArmorBreak || prof.tier >= 3 || isCounterRiposte) {
-        ringsRef.current.push({
-          x: def.x,
-          y: 260,
-          radius: 16,
-          maxRadius: prof.tier >= 4 || isCounterRiposte ? 135 : 95,
-          color: isCounterRiposte ? '#fde047' : prof.color,
-          life: 0.28,
-          maxLife: 0.28,
-        });
+      if (prof.isArmorBreak || prof.tier >= 4 || isCounterRiposte) {
+        spawnGroundCrack(def.x, isCounterRiposte ? 1.25 : 1.0, isCounterRiposte ? '#fde047' : prof.color);
+        spawnDust(def.x, facing);
+        spawnDust(def.x, -facing);
       }
 
-      // ★ 마법 · 속성 연계 전용 캔버스 이펙트 (화염 기둥 / 천뢰 낙하 / 빙결 창 / 고대 마법진 / 강기 파동!) ★
-      if (sk.element === 'FIRE' || sk.element === 'LIGHTNING' || sk.element === 'ICE' || sk.element === 'SHADOW' || sk.isForbidden || (sk.element === 'QI' && prof.tier >= 3)) {
-        const kind: MagicPillarFx['kind'] =
-          sk.isForbidden || sk.element === 'SHADOW'
-            ? 'SHADOW'
-            : sk.element === 'FIRE'
-            ? 'FIRE'
-            : sk.element === 'LIGHTNING'
-            ? 'LIGHTNING'
-            : sk.element === 'ICE'
-            ? 'ICE'
-            : 'QI';
-        magicFxRef.current.push({
-          x: def.x,
-          kind,
-          color: prof.color,
-          life: 0.55,
-          maxLife: 0.55,
-        });
+      // ★ 5원소 8프레임 초고속(20 FPS + 크로스페이드) 32비트 픽셀아트 애니메이션! ★
+      if (sk.element === 'FIRE' || sk.element === 'LIGHTNING' || sk.element === 'ICE' || sk.element === 'SHADOW' || sk.isForbidden || (sk.element === 'QI' && prof.tier >= 2)) {
+        if (sk.isForbidden || sk.element === 'SHADOW') {
+          spawnVfxAnim({ x: def.x, y: 242, sheetSrc: VFX_SHEETS.SHADOW_8F, frameSeq: SEQ_8F, scale: 1.58, duration: 0.44 });
+        } else if (sk.element === 'FIRE') {
+          spawnVfxAnim({ x: def.x, y: 222, sheetSrc: VFX_SHEETS.FIRE_8F, frameSeq: SEQ_8F, scale: 1.65, duration: 0.42 });
+        } else if (sk.element === 'LIGHTNING') {
+          spawnVfxAnim({ x: def.x, y: 214, sheetSrc: VFX_SHEETS.LIGHTNING_8F, frameSeq: SEQ_8F, scale: 1.72, duration: 0.38 });
+        } else if (sk.element === 'ICE') {
+          spawnVfxAnim({ x: def.x, y: 242, sheetSrc: VFX_SHEETS.ICE_8F, frameSeq: SEQ_8F, scale: 1.56, duration: 0.44 });
+        } else {
+          spawnVfxAnim({ x: def.x, y: 226, sheetSrc: VFX_SHEETS.QI_8F, frameSeq: SEQ_8F, scale: 1.62, duration: 0.44 });
+        }
       }
 
       // ★ 극의 필살 반격 「암전 일섬 연참(9연참 검흔 + 잔상 교차 + 납도 정적 → 폭발!)」 — 오직 대고수 경지(Lv.8+ & 통찰55+ / 3합연환 / Lv.9각인)에서만 해금! ★
@@ -815,50 +1005,39 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       if (isCounterRiposte && isSupremeCounterMaster) {
         // 주인공이 적의 등 뒤로 순간 교차 통과!
         atk.x = Math.max(92, Math.min(CANVAS_W - 92, def.x + facing * 125));
-        const timings = [140, 205, 265, 320, 370, 415, 455, 495, 565];
-        const scars = timings.map((atMs, i) => {
-          const isFinalCut = i === timings.length - 1;
-          const ang = isFinalCut ? -0.42 * facing : -1.05 + i * 0.34 + (Math.random() - 0.5) * 0.28;
-          const len = isFinalCut ? 340 : 125 + Math.random() * 65;
-          const cy = isFinalCut ? 245 : 205 + (i % 4) * 26;
-          return {
-            x1: def.x - Math.cos(ang) * len,
-            y1: cy - Math.sin(ang) * len * (isFinalCut ? 0.42 : 0.62),
-            x2: def.x + Math.cos(ang) * len,
-            y2: cy + Math.sin(ang) * len * (isFinalCut ? 0.42 : 0.62),
-            atMs,
-            width: isFinalCut ? 18 : 8 + (i % 3) * 2,
-            isFinisherLine: isFinalCut,
-            played: false,
-          };
-        });
-        const atkSheet = atkIsP ? heroGridSrc : enemyGridSrc;
-        const atkNat = atkIsP ? heroNativeDir : -1;
-        darkSlashRef.current = {
-          active: true,
-          startAt: now,
-          targetX: def.x,
-          targetY: 255,
-          attackerSheet: atkSheet,
-          attackerFlip: atkNat === facing ? 1 : -1,
-          color: prof.color === '#f8fafc' ? '#fde047' : prof.color,
-          title: `${atk.sectTitle} 극의 절명 반격 · 【${sk.customName || sk.name}】`,
-          scars,
-          ghostSpots: [
-            { x: def.x - facing * 105, y: GROUND_Y, frameIdx: 1, flip: atkNat === facing ? 1 : -1, atMs: 140 },
-            { x: def.x + facing * 15, y: GROUND_Y - 26, frameIdx: 3, flip: atkNat === facing ? 1 : -1, atMs: 280 },
-            { x: def.x + facing * 120, y: GROUND_Y, frameIdx: 6, flip: atkNat === facing ? -1 : 1, atMs: 440 },
-          ],
-          finisherDone: false,
-        };
-        metaRef.current.hitstopUntil = Math.max(metaRef.current.hitstopUntil, now + 840);
+        darkFlurryRef.current = createDarkFlurry(
+          now,
+          def.x,
+          248,
+          facing,
+          `${atk.sectTitle} 극의 절명 연참 · 【${sk.customName || sk.name}】`
+        );
+        metaRef.current.hitstopUntil = Math.max(metaRef.current.hitstopUntil, now + 980);
       }
 
-      if (isCounterRiposte) sound.playCounterImpact();
-      else if (sk.origin.includes('FANTASY')) sound.playMagic(sk.element);
-      else sound.playHit(prof.tier >= 3 || prof.isArmorBreak);
+      const hitPan = panAt(def.x);
+      if (isCounterRiposte) {
+        sound.playCounterImpact(hitPan);
+      } else {
+        sound.playHit(prof.tier >= 3 || prof.isArmorBreak || prof.isExecute, {
+          pan: hitPan,
+          unarmed: attackerIsUnarmed,
+          tier: prof.tier,
+          element: sk.element,
+        });
+        if (sk.element !== 'PHYSICAL' || sk.origin.includes('FANTASY')) {
+          sound.playMagic(sk.element === 'PHYSICAL' ? 'QI' : sk.element, hitPan);
+        }
+      }
 
       spawnParticles(def.x, 255, sk.element === 'PHYSICAL' && !isCounterRiposte ? '#fca5a5' : prof.color, prof.particles);
+      spawnSparks(
+        def.x,
+        255,
+        isCounterRiposte ? '#fde047' : sk.element === 'PHYSICAL' ? '#fed7aa' : prof.color,
+        isCounterRiposte ? 20 : 8 + prof.tier * 3,
+        isCounterRiposte ? 13 : 9 + prof.tier
+      );
 
       const dmgLabel = isCounterRiposte ? `반격 -${dmg}!` : isSecondHit ? `연격 -${dmg}` : `-${dmg}`;
       floatsRef.current.push({
@@ -920,7 +1099,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       f.shoutUntil = now + (isCounterRiposte ? 1050 : 880);
       f.shoutIsCounter = isCounterRiposte;
 
-      sound.playUnsheathe();
+      sound.playUnsheathe(panAt(f.x));
       if (isP) {
         if (sk.origin.includes('FANTASY')) metaRef.current.usedMagic = true;
         if (sk.isForbidden) {
@@ -941,6 +1120,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         if (prof.tier >= 4 || sk.isForbidden || sk.origin.includes('FANTASY')) {
           metaRef.current.timeSlowUntil = now + 460;
           metaRef.current.timeSlowColor = prof.color;
+          sound.playTimeSlow();
         }
       }
 
@@ -949,7 +1129,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         const dir = opp.x >= f.x ? 1 : -1;
         spawnGhostTrail(f, opp, isP, 1, 3, '#67e8f9');
         f.x = Math.max(95, Math.min(CANVAS_W - 95, f.x + dir * 135));
-        sound.playDash();
+        sound.playDash(panAt(f.x));
         if (sk.power <= 0) return;
       }
 
@@ -989,8 +1169,14 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         );
       }
 
-      if (sk.origin.includes('FANTASY')) sound.playMagic(sk.element);
-      else sound.playSlash(prof.tier >= 3 || prof.isArmorBreak);
+      const swingUnarmed =
+        (atkIsP ? heroGridSrc.includes('unarmed') : enemyGridSrc.includes('unarmed')) ||
+        sk.weapon === 'UNARMED' ||
+        sk.form === 'STRIKE' ||
+        sk.form === 'GRAPPLE';
+      const swingPan = panAt(atk.x);
+      if (sk.origin.includes('FANTASY')) sound.playMagic(sk.element, swingPan);
+      else sound.playSlash(prof.tier >= 3 || prof.isArmorBreak, { pan: swingPan, unarmed: swingUnarmed, tier: prof.tier });
 
       // 원거리 검기 파동(PROJECTILE 또는 rangeExtend 각인)은 실제 투사체가 날아감!
       if (prof.isRangedWave && !isSecondHit && dist > 150) {
@@ -1015,17 +1201,15 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       // 근접 검기 스윙 VFX (반격 일섬은 간파 직후 파고드므로 최소 사거리 188px 보장!)
       const effectiveReach = act.isCounterRiposte ? Math.max(188, getReach(sk, prof)) : getReach(sk, prof);
       if (dist > effectiveReach) {
-        vfxSpritesRef.current.push({
+        spawnVfxAnim({
           x: atk.x + facing * 75,
           y: 255,
           vx: facing * 40,
-          vy: 0,
-          vfxIdx: prof.vfxIdx,
-          scale: prof.scale * 0.85,
+          sheetSrc: VFX_SHEETS.SLASH_PARRY,
+          frameSeq: [swingUnarmed ? 3 : prof.tier >= 3 ? 1 : 0],
+          scale: prof.scale * 0.88,
           flipX: facing,
-          rotation: 0,
-          life: 0.22,
-          maxLife: 0.22,
+          duration: 0.24,
         });
         return;
       }
@@ -1114,7 +1298,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           def.invulnUntil = now + 260;
           spawnGhostTrail(def, atk, !atkIsP, 1, 2, '#38bdf8');
           def.x = Math.max(92, Math.min(CANVAS_W - 92, def.x + facing * 78));
-          sound.playDash();
+          sound.playDash(panAt(def.x));
           floatsRef.current.push({ x: def.x, y: 176, text: '허공 보법 회피!', color: '#38bdf8', life: 0.78, maxLife: 0.78 });
           pushLog(`${def.name}, ${sk.customName || sk.name}의 강공을 종이 한 장 차이로 회피!`);
           return;
@@ -1132,7 +1316,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           def.qi = Math.min(def.maxQi, def.qi + 16);
           def.counterBuffUntil = now + 2200;
 
-          sound.playParry(true, nextChain);
+          const clashX = Math.round((atk.x + def.x) / 2);
+          sound.playParry(true, nextChain, panAt(clashX));
           // 연환 공방이 깊어질수록 템포가 가속되며 카앙-카앙-카카앙!! 리듬감 극대화!
           const fastHitstop = Math.max(95, 200 - nextChain * 22);
           metaRef.current.hitstopUntil = now + fastHitstop;
@@ -1141,21 +1326,17 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           metaRef.current.shakePower = Math.min(18, 9 + nextChain * 2);
           if (!atkIsP) metaRef.current.justParries += 1;
 
-          const clashX = Math.round((atk.x + def.x) / 2);
-          vfxSpritesRef.current.push({
+          const parryColor = nextChain >= 4 ? '#f43f5e' : nextChain >= 3 ? '#fb923c' : '#fde047';
+          // ★ 32비트 픽셀 정밀 간파 별빛 섬광(1~2합) → 초절정 진홍·황금 연환 폭발(3합+) ★
+          spawnVfxAnim({
             x: clashX,
-            y: 252,
-            vx: 0,
-            vy: 0,
-            vfxIdx: 7,
-            scale: 1.25 + nextChain * 0.12,
-            flipX: 1,
-            rotation: 0,
-            life: 0.34,
-            maxLife: 0.34,
+            y: 250,
+            sheetSrc: VFX_SHEETS.SLASH_PARRY,
+            frameSeq: nextChain >= 3 ? [4, 5] : [4],
+            scale: 1.2 + nextChain * 0.14,
+            duration: 0.36,
           });
-          ringsRef.current.push({ x: clashX, y: 252, radius: 14, maxRadius: 100 + nextChain * 18, color: nextChain >= 3 ? '#fb923c' : '#fde047', life: 0.26, maxLife: 0.26 });
-          spawnParticles(clashX, 252, nextChain >= 3 ? '#fb923c' : '#fde047', 20 + nextChain * 5, 8);
+          spawnSparks(clashX, 252, parryColor, 20 + nextChain * 5, 13 + nextChain);
 
           const chainPopup =
             nextChain === 1
@@ -1208,25 +1389,31 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           : 1.0;
       const dt = rawDt * timeScale * speedRef.current;
 
-      // 초다이나믹 암전 일섬 연참(9연참 + 납도 정적 + 대폭발!) 효과음 타이밍 구동
-      if (darkSlashRef.current?.active) {
-        const ds = darkSlashRef.current;
-        const el = now - ds.startAt;
-        ds.scars.forEach((sc) => {
-          if (!sc.played && el >= sc.atMs) {
-            sc.played = true;
-            sound.playSlash(Boolean(sc.isFinisherLine));
+      // ★ 11연참 초고속 픽셀 단획 암전 연참 + 납도 정적 → 일제 파열 사운드 구동! ★
+      if (darkFlurryRef.current) {
+        const df = darkFlurryRef.current;
+        const el = now - df.startAt;
+        df.strokes.forEach((st, idx) => {
+          if (!st.played && el >= st.atMs) {
+            st.played = true;
+            const pan = panAt(df.targetX) + (idx % 2 === 0 ? -0.28 : 0.28);
+            sound.playSlash(idx === df.strokes.length - 1, { pan, tier: 4 });
           }
         });
-        if (!ds.finisherDone && el >= 780) {
-          ds.finisherDone = true;
-          sound.playCounterImpact();
+        if (!df.burstPlayed && el >= 680) {
+          df.burstPlayed = true;
+          sound.playDarkSlashFinish(panAt(df.targetX));
+          spawnGroundCrack(df.targetX, 1.4, '#fde047');
+          spawnSparks(df.targetX, df.targetY, '#fde047', 24, 15);
           metaRef.current.shakeUntil = now + 260;
           metaRef.current.shakePower = 18;
         }
-        if (el >= 1020) {
-          darkSlashRef.current = null;
+        if (el >= df.totalDurationMs) {
+          darkFlurryRef.current = null;
         }
+      }
+      if (koStrokeRef.current && now - koStrokeRef.current.startAt >= koStrokeRef.current.totalDurationMs) {
+        koStrokeRef.current = null;
       }
 
       const p = playerRef.current;
@@ -1364,7 +1551,17 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         if (p.hp <= 0 || e.hp <= 0) {
           metaRef.current.finished = true;
           const victory = e.hp <= 0;
-          if (victory) sound.playLevelUp();
+          const loserX = victory ? e.x : p.x;
+          // ★ KO 결착 단칼 일섬 한 획 피니시: 임팩트 프리즈 → 화면 양분 거대 일섬 한 획 → 동양 징 결착! ★
+          sound.playSlash(true, { pan: panAt(loserX), tier: 4 });
+          sound.playKoFinisher(panAt(loserX));
+          koStrokeRef.current = createKoOneStroke(now, loserX, 244, victory ? 1 : -1);
+          metaRef.current.timeSlowUntil = now + 480;
+          metaRef.current.timeSlowColor = victory ? '#fde047' : '#ef4444';
+          metaRef.current.shakeUntil = now + 260;
+          metaRef.current.shakePower = 15;
+          spawnSparks(loserX, 246, victory ? '#fde047' : '#fca5a5', 18, 13);
+          if (victory) setTimeout(() => sound.playLevelUp(), 480);
           const finalPayload: BattleOutcomePayload = {
             victory,
             fighterType,
@@ -1410,6 +1607,18 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       slashLinesRef.current = slashLinesRef.current.filter((sl) => {
         sl.life -= dt;
         return sl.life > 0;
+      });
+      bladeArcsRef.current = bladeArcsRef.current.filter((ba) => {
+        ba.life -= dt;
+        return ba.life > 0;
+      });
+      flaresRef.current = flaresRef.current.filter((fl) => {
+        fl.life -= dt;
+        return fl.life > 0;
+      });
+      cracksRef.current = cracksRef.current.filter((cr) => {
+        cr.life -= dt;
+        return cr.life > 0;
       });
       ringsRef.current = ringsRef.current.filter((rg) => {
         rg.life -= dt;
@@ -1622,88 +1831,209 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           drawFighter(p, heroGridSrc, heroNativeDir, e.x >= p.x ? 1 : -1, true);
           drawFighter(e, enemyGridSrc, -1, p.x >= e.x ? 1 : -1, false);
 
-          // ★ 마법 · 속성 전용 시네마틱 이펙트 (화염 기둥 / 천뢰 낙하 / 빙결 창 / 고대 마법진 / 강기 파동!) ★
+          // ★ 발밑 지면 균열 & 수평 충격파 (Ground Cracks) ★
+          cracksRef.current.forEach((cr) => {
+            const pRatio = cr.life / cr.maxLife;
+            ctx.save();
+            ctx.globalAlpha = Math.min(1, pRatio * 1.4);
+            // 지면 타원형 충격파 그림자
+            ctx.strokeStyle = cr.color;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.ellipse(cr.x, cr.y, (1 - pRatio) * 82 * cr.scale + 18, (1 - pRatio) * 16 * cr.scale + 5, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            // 방사형 지면 균열선
+            cr.branches.forEach((b) => {
+              const ex = cr.x + Math.cos(b.angle) * b.len;
+              const ey = cr.y + Math.sin(b.angle) * b.len * 0.28;
+              const mx = (cr.x + ex) / 2 + b.bend * 0.4;
+              const my = (cr.y + ey) / 2 + b.bend * 0.14;
+              ctx.strokeStyle = '#140c08';
+              ctx.lineWidth = 4;
+              ctx.beginPath();
+              ctx.moveTo(cr.x, cr.y);
+              ctx.lineTo(mx, my);
+              ctx.lineTo(ex, ey);
+              ctx.stroke();
+              ctx.strokeStyle = cr.color;
+              ctx.lineWidth = 1.5;
+              ctx.stroke();
+            });
+            ctx.restore();
+          });
+
+          // ★ 마법 · 속성 전용 시네마틱 이펙트 (다층 화염 기둥 / 분기 천뢰 낙하 / 다면체 빙정 / 이중 역회전 마법진 / 상승 강기 파동!) ★
           magicFxRef.current.forEach((mf) => {
             const pRatio = mf.life / mf.maxLife;
+            const prog = 1 - pRatio;
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
             if (mf.kind === 'FIRE') {
-              const grad = ctx.createLinearGradient(mf.x, GROUND_Y, mf.x, 70);
-              grad.addColorStop(0, `rgba(255, 190, 40, ${pRatio * 0.9})`);
-              grad.addColorStop(0.5, `rgba(255, 70, 20, ${pRatio * 0.75})`);
+              // 1) 중심 고열 기둥
+              const grad = ctx.createLinearGradient(mf.x, GROUND_Y, mf.x, 55);
+              grad.addColorStop(0, `rgba(255, 245, 160, ${pRatio * 0.95})`);
+              grad.addColorStop(0.35, `rgba(255, 120, 20, ${pRatio * 0.85})`);
+              grad.addColorStop(0.75, `rgba(220, 38, 12, ${pRatio * 0.55})`);
               grad.addColorStop(1, 'rgba(180, 20, 0, 0)');
               ctx.fillStyle = grad;
-              const pw = 66 + (1 - pRatio) * 44;
-              ctx.fillRect(Math.round(mf.x - pw / 2), 70, Math.round(pw), GROUND_Y - 70);
-            } else if (mf.kind === 'LIGHTNING') {
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 7 * pRatio;
-              ctx.beginPath();
-              let lx = mf.x;
-              ctx.moveTo(lx, 0);
-              for (let ly = 40; ly <= GROUND_Y; ly += 42) {
-                lx = mf.x + (Math.random() - 0.5) * 46;
-                ctx.lineTo(lx, ly);
-              }
-              ctx.stroke();
-              ctx.strokeStyle = '#c084fc';
-              ctx.lineWidth = 14 * pRatio;
-              ctx.stroke();
-            } else if (mf.kind === 'ICE') {
-              for (let k = -2; k <= 2; k++) {
-                const sx = mf.x + k * 24;
-                const sh = (95 - Math.abs(k) * 18) * Math.min(1, (1 - pRatio) * 3.5);
-                ctx.fillStyle = `rgba(125, 211, 252, ${pRatio * 0.85})`;
+              const pw = 62 + prog * 54;
+              ctx.fillRect(Math.round(mf.x - pw / 2), 55, Math.round(pw), GROUND_Y - 55);
+              // 2) 일렁이는 불꽃 혀 5가닥
+              for (let i = -2; i <= 2; i++) {
+                const fx = mf.x + i * 20 + Math.sin(now / 45 + i * 2) * 8;
+                const fh = (145 - Math.abs(i) * 22) * (0.65 + pRatio * 0.45);
+                ctx.fillStyle = i === 0 ? `rgba(255, 250, 200, ${pRatio * 0.9})` : `rgba(251, 146, 60, ${pRatio * 0.72})`;
                 ctx.beginPath();
-                ctx.moveTo(sx - 12, GROUND_Y);
-                ctx.lineTo(sx, GROUND_Y - sh);
-                ctx.lineTo(sx + 12, GROUND_Y);
+                ctx.moveTo(fx - 14, GROUND_Y);
+                ctx.quadraticCurveTo(fx + Math.sin(now / 60 + i) * 14, GROUND_Y - fh * 0.6, fx, GROUND_Y - fh);
+                ctx.quadraticCurveTo(fx - Math.sin(now / 60 + i) * 14, GROUND_Y - fh * 0.6, fx + 14, GROUND_Y);
                 ctx.closePath();
                 ctx.fill();
               }
+              // 3) 지면 작열 링
+              ctx.strokeStyle = `rgba(253, 224, 71, ${pRatio * 0.9})`;
+              ctx.lineWidth = 4;
+              ctx.beginPath();
+              ctx.ellipse(mf.x, GROUND_Y, 45 + prog * 68, 12 + prog * 14, 0, 0, Math.PI * 2);
+              ctx.stroke();
+            } else if (mf.kind === 'LIGHTNING') {
+              // 1) 주 낙뢰 + 좌우 분기 잔가지 번개
+              const pts: Array<{ x: number; y: number }> = [{ x: mf.x, y: 0 }];
+              for (let ly = 36; ly <= GROUND_Y; ly += 34) {
+                pts.push({ x: mf.x + (Math.random() - 0.5) * 44, y: ly });
+              }
+              // 외곽 전격 글로우
+              ctx.strokeStyle = `rgba(192, 132, 252, ${pRatio * 0.95})`;
+              ctx.lineWidth = 18 * pRatio;
+              ctx.beginPath();
+              pts.forEach((pt, idx) => (idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
+              ctx.stroke();
+              // 순백 코어 낙뢰
+              ctx.strokeStyle = `rgba(255, 255, 255, ${pRatio})`;
+              ctx.lineWidth = 6 * pRatio;
+              ctx.stroke();
+              // 분기 잔가지 번개 3줄
+              pts.forEach((pt, idx) => {
+                if (idx >= 2 && idx <= 6 && idx % 2 === 0) {
+                  const dir = idx % 4 === 0 ? 1 : -1;
+                  ctx.strokeStyle = `rgba(216, 180, 254, ${pRatio * 0.85})`;
+                  ctx.lineWidth = 3 * pRatio;
+                  ctx.beginPath();
+                  ctx.moveTo(pt.x, pt.y);
+                  ctx.lineTo(pt.x + dir * (28 + Math.random() * 24), pt.y + 26);
+                  ctx.lineTo(pt.x + dir * (48 + Math.random() * 28), pt.y + 54);
+                  ctx.stroke();
+                }
+              });
+              // 낙뢰 지점 플라즈마 광구
+              const orb = ctx.createRadialGradient(mf.x, GROUND_Y - 10, 4, mf.x, GROUND_Y - 10, 68 * pRatio + 18);
+              orb.addColorStop(0, `rgba(255, 255, 255, ${pRatio})`);
+              orb.addColorStop(0.5, `rgba(192, 132, 252, ${pRatio * 0.7})`);
+              orb.addColorStop(1, 'rgba(126, 34, 206, 0)');
+              ctx.fillStyle = orb;
+              ctx.beginPath();
+              ctx.arc(mf.x, GROUND_Y - 10, 68 * pRatio + 18, 0, Math.PI * 2);
+              ctx.fill();
+            } else if (mf.kind === 'ICE') {
+              // 다면체 빙정 기둥 5개 (명암 2면 + 순백 엣지 하이라이트)
+              for (let k = -2; k <= 2; k++) {
+                const sx = mf.x + k * 25;
+                const sh = (118 - Math.abs(k) * 20) * Math.min(1, prog * 4.0);
+                const w = 15 - Math.abs(k) * 1.5;
+                ctx.fillStyle = `rgba(56, 189, 248, ${pRatio * 0.75})`;
+                ctx.beginPath();
+                ctx.moveTo(sx - w, GROUND_Y);
+                ctx.lineTo(sx, GROUND_Y - sh);
+                ctx.lineTo(sx, GROUND_Y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = `rgba(186, 230, 253, ${pRatio * 0.92})`;
+                ctx.beginPath();
+                ctx.moveTo(sx, GROUND_Y);
+                ctx.lineTo(sx, GROUND_Y - sh);
+                ctx.lineTo(sx + w, GROUND_Y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = `rgba(255, 255, 255, ${pRatio * 0.9})`;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(sx - w, GROUND_Y);
+                ctx.lineTo(sx, GROUND_Y - sh);
+                ctx.lineTo(sx + w, GROUND_Y);
+                ctx.stroke();
+              }
             } else if (mf.kind === 'SHADOW') {
-              ctx.globalAlpha = pRatio * 0.85;
+              // 이중 역회전 고대 마법진 + 8각 성진 + 암영 소용돌이
+              ctx.globalAlpha = pRatio * 0.9;
+              ctx.save();
               ctx.translate(mf.x, 255);
-              ctx.rotate((1 - pRatio) * 3.2);
-              ctx.strokeStyle = '#d946ef';
+              ctx.rotate(prog * 3.6);
+              ctx.strokeStyle = '#e879f9';
               ctx.lineWidth = 3;
               ctx.beginPath();
-              ctx.arc(0, 0, 74, 0, Math.PI * 2);
+              ctx.arc(0, 0, 82, 0, Math.PI * 2);
               ctx.stroke();
-              ctx.strokeRect(-48, -48, 96, 96);
+              ctx.strokeRect(-54, -54, 108, 108);
               ctx.rotate(Math.PI / 4);
-              ctx.strokeRect(-48, -48, 96, 96);
+              ctx.strokeRect(-54, -54, 108, 108);
+              ctx.restore();
+              ctx.save();
+              ctx.translate(mf.x, 255);
+              ctx.rotate(-prog * 5.2);
+              ctx.strokeStyle = '#a855f7';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(0, 0, 52, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.strokeRect(-34, -34, 68, 68);
+              ctx.restore();
             } else if (mf.kind === 'QI') {
-              ctx.globalAlpha = pRatio * 0.7;
+              // 다중 동심원 강기 파동 + 상승하는 금빛 기운 가닥 6줄
+              ctx.globalAlpha = pRatio * 0.85;
               ctx.strokeStyle = '#fde047';
               ctx.lineWidth = 4;
               ctx.beginPath();
-              ctx.arc(mf.x, 255, 35 + (1 - pRatio) * 125, 0, Math.PI * 2);
+              ctx.arc(mf.x, 255, 32 + prog * 135, 0, Math.PI * 2);
               ctx.stroke();
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(mf.x, 255, 18 + prog * 95, 0, Math.PI * 2);
+              ctx.stroke();
+              for (let s = 0; s < 6; s++) {
+                const sx = mf.x + (s - 2.5) * 22 + Math.sin(prog * 10 + s) * 8;
+                const sy = GROUND_Y - prog * 170 - (s % 2) * 28;
+                ctx.strokeStyle = `rgba(253, 224, 71, ${pRatio * 0.85})`;
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(sx, sy + 36);
+                ctx.lineTo(sx, sy);
+                ctx.stroke();
+              }
             }
             ctx.restore();
           });
 
-          // ★ 가산합성(Additive Blend) 32비트 무술 VFX 스프라이트 + 비행 검기 파동! ★
-          const vfxSheet = getVfxGridSheet('/assets/grid_vfx_martial_8f.jpg', 4, 2);
-          if (vfxSheet && vfxSheet.frames.length === 8) {
+          // ★ 60fps 크로스페이드 보간 32비트 픽셀아트 VFX + 비행 검기 파동! ★
+          vfxSpritesRef.current.forEach((v) => {
+            drawSmoothVfxSprite(ctx, {
+              sheetSrc: v.sheetSrc || VFX_SHEETS.LEGACY,
+              frameSeq: v.frameSeq && v.frameSeq.length > 0 ? v.frameSeq : [v.vfxIdx],
+              progress: 1 - v.life / v.maxLife,
+              x: v.x,
+              y: v.y,
+              scale: v.scale,
+              flipX: v.flipX,
+              rotation: v.rotation,
+            });
+          });
+
+          const waveSheet = getVfxGridSheet(VFX_SHEETS.LEGACY, 4, 2);
+          if (waveSheet && waveSheet.frames.length === 8) {
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
-            vfxSpritesRef.current.forEach((v) => {
-              const cell = vfxSheet.frames[v.vfxIdx % 8];
-              const alpha = Math.min(1, (v.life / v.maxLife) * 1.4);
-              const size = Math.round(170 * v.scale);
-              ctx.save();
-              ctx.globalAlpha = alpha;
-              ctx.translate(Math.round(v.x), Math.round(v.y));
-              ctx.rotate(v.rotation);
-              ctx.scale(v.flipX, 1);
-              ctx.drawImage(cell, -size / 2, -size / 2, size, size);
-              ctx.restore();
-            });
-
             wavesRef.current.forEach((wv) => {
-              const cell = vfxSheet.frames[wv.vfxIdx % 8];
+              const cell = waveSheet.frames[wv.vfxIdx % 8];
               const size = Math.round(145 * wv.scale);
               ctx.save();
               ctx.translate(Math.round(wv.x), Math.round(wv.y));
@@ -1714,39 +2044,137 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             ctx.restore();
           }
 
-          // 일섬선 & 충격파 링
+          // ★ 초승달 붓터치 검궤 호선 (Curved Tapered Blade Arcs — 양끝이 날카롭게 좁아지는 아케이드 검기!) ★
+          bladeArcsRef.current.forEach((ba) => {
+            const pRatio = ba.life / ba.maxLife;
+            const steps = 14;
+            const outerPts: Array<{ x: number; y: number }> = [];
+            const innerPts: Array<{ x: number; y: number }> = [];
+            for (let i = 0; i <= steps; i++) {
+              const t = i / steps;
+              const ang = ba.startAngle + (ba.endAngle - ba.startAngle) * t;
+              const taper = Math.sin(t * Math.PI); // 양끝 0 → 중앙 최대 두께!
+              const w = ba.thickness * taper * (0.65 + pRatio * 0.5);
+              const rOut = ba.radius + w;
+              const rIn = Math.max(8, ba.radius - w * 0.8);
+              outerPts.push({ x: ba.x + Math.cos(ang) * rOut, y: ba.y + Math.sin(ang) * rOut * 0.78 });
+              innerPts.push({ x: ba.x + Math.cos(ang) * rIn, y: ba.y + Math.sin(ang) * rIn * 0.78 });
+            }
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = Math.min(1, pRatio * 1.25);
+            // 외곽 속성색 검기
+            ctx.fillStyle = ba.color;
+            ctx.beginPath();
+            outerPts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            for (let i = innerPts.length - 1; i >= 0; i--) ctx.lineTo(innerPts[i].x, innerPts[i].y);
+            ctx.closePath();
+            ctx.fill();
+            // 중앙 순백 날끝 하이라이트
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = Math.max(1.5, ba.thickness * 0.28 * pRatio);
+            ctx.beginPath();
+            for (let i = 0; i <= steps; i++) {
+              const t = i / steps;
+              const ang = ba.startAngle + (ba.endAngle - ba.startAngle) * t;
+              const px = ba.x + Math.cos(ang) * ba.radius;
+              const py = ba.y + Math.sin(ang) * ba.radius * 0.78;
+              if (i === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+            ctx.restore();
+          });
+
+          // 일섬선 & 4방향 십자 별빛 섬광 & 충격파 링
           slashLinesRef.current.forEach((sl) => {
             ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
             ctx.globalAlpha = sl.life / sl.maxLife;
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = sl.width + 3;
+            ctx.strokeStyle = sl.color;
+            ctx.lineWidth = sl.width + 6;
             ctx.beginPath();
             ctx.moveTo(sl.x1, sl.y1);
             ctx.lineTo(sl.x2, sl.y2);
             ctx.stroke();
-            ctx.strokeStyle = sl.color;
-            ctx.lineWidth = sl.width;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = Math.max(2, sl.width * 0.55);
             ctx.stroke();
+            ctx.restore();
+          });
+
+          flaresRef.current.forEach((fl) => {
+            const pRatio = fl.life / fl.maxLife;
+            const len = fl.size * (0.45 + (1 - pRatio) * 0.75);
+            const thick = Math.max(2, 7 * pRatio);
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = Math.min(1, pRatio * 1.3);
+            ctx.translate(fl.x, fl.y);
+            ctx.rotate(fl.rotation);
+            // 4방향 다이아몬드 십자 광선 (주광 + 45도 보조광)
+            [0, Math.PI / 2, Math.PI / 4, (3 * Math.PI) / 4].forEach((ang, idx) => {
+              const armLen = idx < 2 ? len : len * 0.55;
+              const armW = idx < 2 ? thick : thick * 0.6;
+              ctx.save();
+              ctx.rotate(ang);
+              ctx.fillStyle = idx < 2 ? fl.color : '#ffffff';
+              ctx.beginPath();
+              ctx.moveTo(-armLen, 0);
+              ctx.lineTo(0, -armW);
+              ctx.lineTo(armLen, 0);
+              ctx.lineTo(0, armW);
+              ctx.closePath();
+              ctx.fill();
+              ctx.restore();
+            });
+            // 중심 순백 코어
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(0, 0, Math.max(3, 12 * pRatio), 0, Math.PI * 2);
+            ctx.fill();
             ctx.restore();
           });
 
           ringsRef.current.forEach((rg) => {
             ctx.save();
-            ctx.globalAlpha = (rg.life / rg.maxLife) * 0.85;
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = (rg.life / rg.maxLife) * 0.88;
             ctx.strokeStyle = rg.color;
-            ctx.lineWidth = 4;
+            ctx.lineWidth = 4.5;
             ctx.beginPath();
             ctx.arc(rg.x, rg.y, rg.radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(rg.x, rg.y, Math.max(2, rg.radius - 4), 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
           });
 
-          // 픽셀 파티클
+          // 픽셀 + 방향성 쇠불꽃 스파크 스트릭 + 동양 먹물 방울 파티클!
           particlesRef.current.forEach((pt) => {
+            const alpha = Math.max(0, pt.life / pt.maxLife);
             ctx.save();
-            ctx.globalAlpha = Math.max(0, pt.life / pt.maxLife);
-            ctx.fillStyle = pt.color;
-            ctx.fillRect(Math.round(pt.x), Math.round(pt.y), pt.size, pt.size);
+            ctx.globalAlpha = alpha;
+            if (pt.kind === 'SPARK') {
+              ctx.globalCompositeOperation = 'lighter';
+              ctx.strokeStyle = pt.color;
+              ctx.lineWidth = pt.size;
+              ctx.beginPath();
+              ctx.moveTo(pt.x, pt.y);
+              ctx.lineTo(pt.x - pt.vx * 2.6, pt.y - pt.vy * 2.6);
+              ctx.stroke();
+            } else if (pt.kind === 'INK') {
+              ctx.fillStyle = pt.color;
+              ctx.beginPath();
+              ctx.arc(Math.round(pt.x), Math.round(pt.y), Math.max(1.5, pt.size * 0.55 * alpha), 0, Math.PI * 2);
+              ctx.fill();
+            } else {
+              ctx.fillStyle = pt.color;
+              ctx.fillRect(Math.round(pt.x), Math.round(pt.y), pt.size, pt.size);
+            }
             ctx.restore();
           });
 
@@ -1782,7 +2210,14 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             ctx.restore();
           }
 
-          // ★ 극의 절명 반격 「초다이나믹 암전 일섬 연참 (눈빛 섬광 → 9연 테이퍼드 검흔 & 잔상 교차 → 납도 정적 → 폭발!!)」 ★
+          // ★ 11연참 초고속 픽셀 단획 암전 연참 & KO 단칼 일섬 한 획 피니시 오버레이! ★
+          if (darkFlurryRef.current) {
+            renderDarkFlurry(ctx, darkFlurryRef.current, now, viewW, viewH, camLeft);
+          }
+          if (koStrokeRef.current) {
+            renderKoOneStroke(ctx, koStrokeRef.current, now, viewW, viewH, camLeft);
+          }
+
           if (darkSlashRef.current?.active) {
             const ds = darkSlashRef.current;
             const el = now - ds.startAt;

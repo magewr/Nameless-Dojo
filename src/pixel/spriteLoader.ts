@@ -410,7 +410,9 @@ export function getVfxGridSheet(src: string, cols = 4, rows = 2): VfxSheet | nul
           cell.height = ch;
           const cctx = cell.getContext('2d', { willReadFrequently: true })!;
           cctx.imageSmoothingEnabled = false;
-          cctx.drawImage(off, c * cw, r * ch, cw, ch, 0, 0, cw, ch);
+          // 미세하게 안쪽 2px 크롭하여 인접 셀 번짐 0% 보장
+          const pad = 2;
+          cctx.drawImage(off, c * cw + pad, r * ch + pad, cw - pad * 2, ch - pad * 2, 0, 0, cw, ch);
 
           // 검정 배경을 매끄러운 광원 알파로 변환 (어두울수록 완전 투명!)
           const idata = cctx.getImageData(0, 0, cw, ch);
@@ -589,6 +591,115 @@ export function preloadAllGameArt() {
     '/assets/grid_ko_fallen_4x2.jpg',
   ].forEach((s) => getGridSpriteSheet(s, 4, 2));
 
-  // 4×2 무술 VFX 그리드 시트 프리로드
-  getVfxGridSheet('/assets/grid_vfx_martial_8f.jpg', 4, 2);
+  // 4×2 무술·원소·필살기 VFX 그리드 시트 프리로드 (8프레임 초매끄러운 원소·검격 6종 포함!)
+  [
+    '/assets/grid_vfx_martial_8f.jpg',
+    '/assets/grid_vfx_slash_parry_8f.jpg',
+    '/assets/grid_vfx_slash_8f.jpg',
+    '/assets/grid_vfx_fire_8f.jpg',
+    '/assets/grid_vfx_lightning_8f.jpg',
+    '/assets/grid_vfx_ice_8f.jpg',
+    '/assets/grid_vfx_shadow_8f.jpg',
+    '/assets/grid_vfx_qi_8f.jpg',
+    '/assets/grid_vfx_katana_strokes_4x2.jpg',
+  ].forEach((s) => getVfxGridSheet(s, 4, 2));
+  getKatanaStrokeAssets();
+}
+
+export const VFX_SHEETS = {
+  LEGACY: '/assets/grid_vfx_martial_8f.jpg',
+  SLASH_PARRY: '/assets/grid_vfx_slash_parry_8f.jpg',
+  SLASH_8F: '/assets/grid_vfx_slash_8f.jpg',
+  FIRE_8F: '/assets/grid_vfx_fire_8f.jpg',
+  LIGHTNING_8F: '/assets/grid_vfx_lightning_8f.jpg',
+  ICE_8F: '/assets/grid_vfx_ice_8f.jpg',
+  SHADOW_8F: '/assets/grid_vfx_shadow_8f.jpg',
+  QI_8F: '/assets/grid_vfx_qi_8f.jpg',
+  FIRE_LIGHTNING: '/assets/grid_vfx_fire_lightning_8f.jpg',
+  ICE_SHADOW: '/assets/grid_vfx_ice_shadow_8f.jpg',
+  QI_FINISHER: '/assets/grid_vfx_qi_finisher_8f.jpg',
+  KATANA_STROKES: '/assets/grid_vfx_katana_strokes_4x2.jpg',
+  KO_ONESTROKE: '/assets/vfx_ko_onestroke_straight.jpg',
+} as const;
+
+export interface KatanaStrokeAssets {
+  strokes: HTMLCanvasElement[]; // Row 0: 4종의 날카로운 단획 검기 [청백, 진홍, 황금, 은백]
+  koPanorama: HTMLCanvasElement | null; // 이음새 0% 16:9 통짜 면도날 KO 일섬 한 획!
+}
+
+let katanaStrokeCache: KatanaStrokeAssets | null = null;
+let katanaStrokeLoading = false;
+
+export function getKatanaStrokeAssets(): KatanaStrokeAssets | null {
+  if (katanaStrokeCache) return katanaStrokeCache;
+  if (katanaStrokeLoading || typeof window === 'undefined') return null;
+  katanaStrokeLoading = true;
+
+  const convertBlackToGlowAlpha = (c: HTMLCanvasElement) => {
+    const cctx = c.getContext('2d', { willReadFrequently: true })!;
+    const idata = cctx.getImageData(0, 0, c.width, c.height);
+    const pd = idata.data;
+    for (let i = 0; i < pd.length; i += 4) {
+      const maxC = Math.max(pd[i], pd[i + 1], pd[i + 2]);
+      if (maxC < 18) {
+        pd[i + 3] = 0;
+      } else {
+        pd[i + 3] = Math.min(255, Math.round((maxC - 18) * 1.55));
+      }
+    }
+    cctx.putImageData(idata, 0, 0);
+  };
+
+  const result: KatanaStrokeAssets = { strokes: [], koPanorama: null };
+
+  // 1) 암전 연참용 4종 단획 스프라이트 (Row 0)
+  const img1 = new Image();
+  img1.crossOrigin = 'anonymous';
+  img1.onload = () => {
+    const W = img1.naturalWidth;
+    const H = img1.naturalHeight;
+    const off = document.createElement('canvas');
+    off.width = W;
+    off.height = H;
+    const ctx = off.getContext('2d', { willReadFrequently: true })!;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img1, 0, 0, W, H);
+
+    const cw = Math.floor(W / 4);
+    const ch = Math.floor(H / 2);
+    for (let col = 0; col < 4; col++) {
+      const cell = document.createElement('canvas');
+      cell.width = cw - 4;
+      cell.height = ch - 4;
+      const cctx = cell.getContext('2d', { willReadFrequently: true })!;
+      cctx.imageSmoothingEnabled = false;
+      cctx.drawImage(off, col * cw + 2, 2, cw - 4, ch - 4, 0, 0, cell.width, cell.height);
+      convertBlackToGlowAlpha(cell);
+      result.strokes.push(cell);
+    }
+    katanaStrokeCache = result;
+  };
+  img1.src = VFX_SHEETS.KATANA_STROKES;
+
+  // 2) KO 단칼 일섬 전용 16:9 이음새 0% 통짜 스프라이트 (중앙 띠 영역만 깔끔하게 크롭!)
+  const img2 = new Image();
+  img2.crossOrigin = 'anonymous';
+  img2.onload = () => {
+    const W = img2.naturalWidth;
+    const H = img2.naturalHeight;
+    const cropY = Math.floor(H * 0.28);
+    const cropH = Math.floor(H * 0.44);
+    const koCanvas = document.createElement('canvas');
+    koCanvas.width = W;
+    koCanvas.height = cropH;
+    const kctx = koCanvas.getContext('2d', { willReadFrequently: true })!;
+    kctx.imageSmoothingEnabled = false;
+    kctx.drawImage(img2, 0, cropY, W, cropH, 0, 0, W, cropH);
+    convertBlackToGlowAlpha(koCanvas);
+    result.koPanorama = koCanvas;
+    katanaStrokeCache = result;
+  };
+  img2.src = VFX_SHEETS.KO_ONESTROKE;
+
+  return null;
 }

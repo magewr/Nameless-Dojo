@@ -13,6 +13,7 @@ import {
   getHeroFightGridSrc,
   getVfxGridSheet,
   loadRawImage,
+  VFX_SHEETS,
 } from '../pixel/spriteLoader';
 import { Flame, RotateCcw, Shield, Snowflake, Sparkles, Swords, X, Zap } from 'lucide-react';
 import { sound } from '../engine/sound';
@@ -29,6 +30,7 @@ export const SkillPreviewCanvas: React.FC<{
   useEffect(() => {
     let rafId = 0;
     const startAt = performance.now();
+    const sfxPlayed = { unsheathe: false, parry: false, hit: false, combo2: false, dark: false };
     const isUnarmedSkill = skill.weapon === 'UNARMED' || skill.form === 'STRIKE' || skill.form === 'GRAPPLE';
     const heroInfo = getHeroFightGridSrc(
       state.country,
@@ -249,69 +251,77 @@ export const SkillPreviewCanvas: React.FC<{
             }
           }
 
-          // 마법·속성 전용 시연 이펙트 (화염 기둥 / 천뢰 번개 / 빙결 창 / 마법진!)
+          // ★ 마법·속성 전용 8프레임 초고속(20fps) 32비트 픽셀 스프라이트 애니메이션! ★
           if (showMagic && !skill.isPassive) {
-            ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
-            if (skill.element === 'FIRE') {
-              const grad = ctx.createLinearGradient(ex, GY, ex, 30);
-              grad.addColorStop(0, 'rgba(255, 190, 40, 0.85)');
-              grad.addColorStop(0.5, 'rgba(255, 70, 20, 0.65)');
-              grad.addColorStop(1, 'rgba(180, 20, 0, 0)');
-              ctx.fillStyle = grad;
-              ctx.fillRect(Math.round(ex - 26), 30, 52, GY - 30);
-            } else if (skill.element === 'LIGHTNING') {
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 4;
-              ctx.beginPath();
-              ctx.moveTo(ex, 0);
-              for (let ly = 26; ly <= GY; ly += 28) ctx.lineTo(ex + (Math.random() - 0.5) * 26, ly);
-              ctx.stroke();
-              ctx.strokeStyle = '#c084fc';
-              ctx.lineWidth = 8;
-              ctx.stroke();
-            } else if (skill.element === 'ICE') {
-              for (let k = -2; k <= 2; k++) {
-                const sx = ex + k * 14;
-                const sh = 56 - Math.abs(k) * 10;
-                ctx.fillStyle = 'rgba(125, 211, 252, 0.8)';
-                ctx.beginPath();
-                ctx.moveTo(sx - 7, GY);
-                ctx.lineTo(sx, GY - sh);
-                ctx.lineTo(sx + 7, GY);
-                ctx.closePath();
-                ctx.fill();
+            const animStep = Math.floor((now / 52) % 8);
+            let mSheetSrc: string | null = null;
+            if (skill.element === 'FIRE') mSheetSrc = VFX_SHEETS.FIRE_8F;
+            else if (skill.element === 'LIGHTNING') mSheetSrc = VFX_SHEETS.LIGHTNING_8F;
+            else if (skill.element === 'ICE') mSheetSrc = VFX_SHEETS.ICE_8F;
+            else if (skill.element === 'SHADOW' || skill.isForbidden) mSheetSrc = VFX_SHEETS.SHADOW_8F;
+            else if (skill.element === 'QI') mSheetSrc = VFX_SHEETS.QI_8F;
+            if (mSheetSrc) {
+              const mSheet = getVfxGridSheet(mSheetSrc, 4, 2);
+              if (mSheet && mSheet.frames[animStep]) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                const mw = 158;
+                const mh = 138;
+                ctx.drawImage(mSheet.frames[animStep], Math.round(ex - mw / 2), Math.round(GY - mh + 8), mw, mh);
+                ctx.restore();
               }
-            } else if (skill.element === 'SHADOW' || skill.isForbidden) {
-              ctx.translate(ex, GY - 54);
-              ctx.rotate(now / 260);
-              ctx.strokeStyle = '#d946ef';
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.arc(0, 0, 44, 0, Math.PI * 2);
-              ctx.stroke();
-              ctx.strokeRect(-28, -28, 56, 56);
-              ctx.rotate(Math.PI / 4);
-              ctx.strokeRect(-28, -28, 56, 56);
             }
-            ctx.restore();
           }
 
-          // 가산합성 32비트 VFX
-          if (vfxSheet && vfxSheet.frames.length === 8 && !showDarkSlash) {
+          // 첫 1회 시연 입체 사운드 트리거 (루프 반복 시 소음 방지)
+          const rawElapsed = now - startAt;
+          if (rawElapsed < 2500) {
+            if (!sfxPlayed.unsheathe && t >= 120) {
+              sfxPlayed.unsheathe = true;
+              sound.playUnsheathe(-0.35);
+            }
+            if (!sfxPlayed.parry && showParrySpark) {
+              sfxPlayed.parry = true;
+              sound.playParry(true, 2, 0);
+            }
+            if (!sfxPlayed.hit && showVfx) {
+              sfxPlayed.hit = true;
+              if (isCounter) sound.playCounterImpact(0.35);
+              else {
+                sound.playSlash(tier >= 3, { pan: -0.1, unarmed: isUnarmedSkill, tier });
+                sound.playHit(tier >= 3, { pan: 0.35, unarmed: isUnarmedSkill, tier });
+                if (skill.element !== 'PHYSICAL') sound.playMagic(skill.element, 0.35);
+              }
+            }
+            if (!sfxPlayed.combo2 && showCombo2) {
+              sfxPlayed.combo2 = true;
+              sound.playHit(true, { pan: 0.4, unarmed: isUnarmedSkill, tier });
+            }
+            if (!sfxPlayed.dark && showDarkSlash && t >= 1120) {
+              sfxPlayed.dark = true;
+              sound.playDarkSlashFinish(0.3);
+            }
+          }
+
+          // ★ 가산합성 32비트 픽셀아트 VFX (검궤·간파·충격파 스프라이트 시트!) ★
+          const spVfxSheet = getVfxGridSheet(VFX_SHEETS.SLASH_PARRY, 4, 2);
+          if (spVfxSheet && spVfxSheet.frames.length === 8 && !showDarkSlash) {
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
             if (showParrySpark) {
-              const s = 105;
-              ctx.drawImage(vfxSheet.frames[7], Math.round((hx + ex) / 2 - s / 2), Math.round(GY - 60 - s / 2), s, s);
+              const s = 132;
+              const cx = Math.round((hx + ex) / 2);
+              const cy = Math.round(GY - 60);
+              ctx.drawImage(spVfxSheet.frames[tier >= 3 ? 5 : 4], Math.round(cx - s / 2), Math.round(cy - s / 2), s, s);
             }
             if (showVfx) {
-              const s = Math.round(74 + tier * 20);
-              ctx.drawImage(vfxSheet.frames[vfxIdx], Math.round(vfxX - s / 2), Math.round(GY - 56 - s / 2), s, s);
+              const s = Math.round(92 + tier * 20);
+              const idx = isUnarmedSkill ? 3 : isCounter || tier >= 4 ? 2 : tier >= 2 ? 1 : 0;
+              ctx.drawImage(spVfxSheet.frames[idx], Math.round(vfxX - s / 2), Math.round(GY - 58 - s / 2), s, s);
             }
             if (showCombo2) {
-              const s = Math.round(68 + tier * 16);
-              ctx.drawImage(vfxSheet.frames[isUnarmedSkill ? 3 : 1], Math.round(vfxX - s / 2), Math.round(GY - 50 - s / 2), s, s);
+              const s = Math.round(86 + tier * 18);
+              ctx.drawImage(spVfxSheet.frames[isUnarmedSkill ? 3 : 2], Math.round(vfxX - s / 2), Math.round(GY - 52 - s / 2), s, s);
             }
             ctx.restore();
           }
