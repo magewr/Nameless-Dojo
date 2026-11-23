@@ -47,6 +47,7 @@ import { AutoBattleView } from './components/AutoBattleView';
 import { TrainingAndCraftingModal } from './components/TrainingAndCraftingModal';
 import { DojoAndWeaponsModal } from './components/DojoAndWeaponsModal';
 import { DisciplesAndFamilyModal } from './components/DisciplesAndFamilyModal';
+import { ensureSectsAndTemperaments, expelDisciple, requestSectSpar, sendSectGift, talkToDisciple } from './engine/sectLogic';
 import { EventModal, EventResultModal, EventResultNotice, MerchantModal, TraitSelectModal } from './components/MerchantAndEventModals';
 import { EndingReportView } from './components/EndingReportView';
 import { withMilestones } from './engine/milestones';
@@ -238,7 +239,8 @@ export function App() {
       if (loaded.activeBuild === undefined) loaded.activeBuild = null;
       if (!loaded.graduatedDisciples) loaded.graduatedDisciples = [];
       if (!loaded.milestones) loaded.milestones = [];
-      setState(loaded);
+      // 문파 관계·문하생 기질이 없던 시절의 세이브는 지금 난이도에 맞춰 채운다.
+      setState(ensureSectsAndTemperaments(loaded));
       setCreating(false);
     }
   };
@@ -603,6 +605,16 @@ export function App() {
               return d.id === dId ? { ...d, role } : d;
             });
             setState({ ...state, disciples: nextD });
+          }}
+          onTalk={(dId) => setState(talkToDisciple(state, dId))}
+          onExpel={(dId) => setState(expelDisciple(state, dId))}
+          onSectGift={(sectId) => setState(sendSectGift(state, sectId))}
+          onSectSpar={(sectId) => {
+            const next = requestSectSpar(state, sectId);
+            if (next !== state) {
+              setShowDisciplesModal(false);
+              setState(next);
+            }
           }}
         />
       )}

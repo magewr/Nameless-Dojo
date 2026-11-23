@@ -234,6 +234,43 @@ export interface DojoFacilities {
 
 export type DiscipleRole = 'STUDENT' | 'INSTRUCTOR' | 'ESCORT' | 'HEIR';
 
+// 문하생의 기질. 앞의 셋은 올곧은 쪽, 뒤의 다섯은 말썽을 부리는 쪽이다.
+export type Temperament =
+  | 'UPRIGHT' // 강직
+  | 'DILIGENT' // 성실
+  | 'GENTLE' // 온순
+  | 'HOTBLOOD' // 다혈질 — 타 문파와 싸움을 벌인다
+  | 'ARROGANT' // 오만 — 아랫사람과 마을 사람을 업신여긴다
+  | 'GREEDY' // 탐욕 — 돈에 손을 댄다
+  | 'LAZY' // 나태 — 수련을 빼먹고 노름판을 기웃거린다
+  | 'SCHEMER'; // 흑심 — 겉으로는 따르면서 속으로 세를 모은다
+
+// 강호의 다른 문파와 맺은 관계
+export type SectKind = 'RIVAL' | 'ORTHODOX' | 'OUTLAW' | 'MERCHANT' | 'SPLINTER';
+export type SectStance = 'HOSTILE' | 'COLD' | 'NEUTRAL' | 'FRIENDLY' | 'ALLIED';
+
+export interface SectIncident {
+  year: number;
+  season: Season;
+  text: string;
+  delta: number;
+}
+
+export interface SectState {
+  id: string;
+  name: string;
+  kind: SectKind;
+  leaderTitle: string; // 장문인 · 문주 · 국주 …
+  leader: string;
+  champion: string; // 대신 칼을 드는 대표 무사
+  style: string; // 한 줄 소개
+  relation: number; // -100(불구대천) ~ 100(혈맹)
+  power: number; // 세력 0 ~ 100
+  met: boolean; // 아직 서로를 의식하지 않으면 false
+  allied?: boolean;
+  history: SectIncident[]; // 최근 사건 (최신이 앞)
+}
+
 export interface GraduatedDisciple {
   id: string;
   name: string;
@@ -245,6 +282,7 @@ export interface GraduatedDisciple {
   fate: 'GRANDMASTER' | 'SUCCESSFUL' | 'ORDINARY' | 'RIVAL_BETRAYER';
   topSkillName: string;
   revisited?: boolean;
+  joinedSectName?: string; // 등을 돌린 제자가 몸을 의탁한 문파
 }
 
 export interface Disciple {
@@ -269,6 +307,12 @@ export interface Disciple {
   dead?: boolean;
   leftReason?: string;
   weaponId?: string;
+  temperament?: Temperament; // 구버전 세이브에는 없을 수 있다 (불러올 때 채운다)
+  temperamentKnown?: boolean; // 스승이 기질을 파악했는가 (입문 후 한 해쯤 지켜봐야 안다)
+  mask?: Temperament; // 흑심을 품은 자가 겉으로 내보이는 기질
+  exposed?: boolean; // 흑심이 드러났는가
+  plot?: number; // 흑심의 진척 0 ~ 100 (100이면 반란)
+  watched?: boolean; // 감시를 붙였는가
 }
 
 export interface Spouse {
@@ -451,6 +495,7 @@ export interface GameState {
   equippedWeaponId: string;
   disciples: Disciple[];
   graduatedDisciples?: GraduatedDisciple[];
+  sects?: SectState[]; // 구버전 세이브에는 없을 수 있다 (불러올 때 만든다)
   taughtSkillIds: string[];
   spouse: Spouse | null;
   rival: RivalState;
@@ -479,6 +524,12 @@ export interface GameState {
     westernFear: boolean;
     rivalFarewellDone: boolean;
     heirConflictDone: boolean;
+    heirAskedYear?: number; // 후계 지명을 마지막으로 물은(또는 미룬) 해. 재지명 이벤트의 간격 계산용
+    lastDramaTurn?: number; // 문파 분쟁·제자 말썽 이벤트가 마지막으로 터진 턴 (연달아 터지지 않게)
+    diplomacyTurn?: number; // 이번 계절에 문파 외교(예물·교류 비무)를 했는가
+    talkTurn?: number; // 이번 계절에 제자 면담을 했는가
+    rebellions?: number; // 겪은 반란 횟수
+    troubleCount?: number; // 제자가 일으킨 말썽 횟수
     triggeredEvents: string[];
     recentEventBases?: string[]; // 최근 발동 이벤트 계열 기록 (중복 도배 방지!)
     minorEventIdsSeen: string[];

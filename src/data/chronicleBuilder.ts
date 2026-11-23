@@ -73,7 +73,8 @@ const SCALE_LABEL = { SMALL: '소도장', MEDIUM: '중견 문파', GRAND: '대�
 const SUCCESSION_LABEL = { NONE: '단절', SCATTERED: '후계 미지명', DEGRADED: '계승 열화', INTACT: '온전한 계승', FLOURISH: '청출어람' } as const;
 
 function causeFrom(facts: LineageFacts, keyPrefix: string | undefined, fallback: string | undefined): ChronicleCause | undefined {
-  const m = keyPrefix ? findMilestone(facts, keyPrefix) : null;
+  // 후계 지명·상실은 여러 번 있을 수 있으므로 마지막 것이 지금의 계승을 설명한다.
+  const m = keyPrefix ? findMilestone(facts, keyPrefix, keyPrefix.startsWith('HEIR_')) : null;
   if (m) return { text: m.text, year: m.year, season: m.season, age: m.age };
   return fallback ? { text: fallback } : undefined;
 }
@@ -150,7 +151,7 @@ export function buildChronicle(facts: LineageFacts): ChronicleResult {
     badge: opening.badge,
     cause: facts.heir
       ? causeFrom(facts, 'HEIR_NAMED', undefined)
-      : { text: '후계자를 끝내 정하지 않은 채 눈을 감은 일' },
+      : causeFrom(facts, 'HEIR_LOST', '후계자를 끝내 정하지 않은 채 눈을 감은 일'),
   };
 
   // ------------------------------------------------------------------ 슬롯 5 꼬리말 (계승 상태)

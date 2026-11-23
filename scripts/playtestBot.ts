@@ -21,8 +21,12 @@ import {
 import { MINOR_EVENTS } from '../src/data/minorEvents';
 import { generatePostMortemEnding } from '../src/data/worldAndEndings';
 import { withMilestones } from '../src/engine/milestones';
+import { canDoDiplomacy, canTalkToDisciple, expelDisciple, sendSectGift, talkToDisciple } from '../src/engine/sectLogic';
+import { getSectStance } from '../src/data/sects';
+import { DIFFICULTY_CONFIGS } from '../src/data/difficulty';
+import { isTroublemaker } from '../src/data/temperament';
 import { VIGNETTES } from '../src/data/chronicleVignettes';
-import { BattleTactic, CountryId, DifficultyId, DojoFacilities, ScheduleActivityId, Skill } from '../src/types/game';
+import { BattleTactic, CountryId, DifficultyId, DojoFacilities, GameState, ScheduleActivityId, Skill } from '../src/types/game';
 import { getFacilityUpgradeCost } from '../src/data/balanceRules';
 
 // Node 환경 localStorage mock
@@ -45,8 +49,25 @@ let chronicleEntrySum = 0;
 let chronicleCauseWithYear = 0;
 let chronicleCauseTotal = 0;
 let milestoneSum = 0;
-function recordChronicleStats(ending: ReturnType<typeof generatePostMortemEnding>, st: { milestones?: unknown[] }) {
+const lifeSamples: Array<{ fame: number; alive: number; virtue: number; ruthless: number; commerce: number; ascetic: number; arcane: number; age: number }> = [];
+const scaleByDifficulty = new Map<string, number>();
+const axisCounts = new Map<string, number>();
+const successionCounts = new Map<string, number>();
+let heirEventDone = 0;
+let heirAliveAtDeath = 0;
+let heirLostDead = 0;
+function recordChronicleStats(ending: ReturnType<typeof generatePostMortemEnding>, st: GameState) {
   chronicleRuns++;
+  lifeSamples.push({ fame: st.fame, alive: st.disciples.filter((d) => !d.dead).length, ...st.reputation, age: st.age });
+  const diffKey = `${st.difficulty || 'EASY'} ${ending.routeTag.split(' · ').filter((x) => /소도장|중견|대문파/.test(x))[0] || '?'}`;
+  scaleByDifficulty.set(diffKey, (scaleByDifficulty.get(diffKey) || 0) + 1);
+  const axisKey = ending.routeTag.split(' · ')[0];
+  axisCounts.set(axisKey, (axisCounts.get(axisKey) || 0) + 1);
+  const succKey = ending.routeTag.split(' · ').filter((x) => /단절|후계 미지명|계승 열화|온전한 계승|청출어람/.test(x))[0] || '?';
+  successionCounts.set(succKey, (successionCounts.get(succKey) || 0) + 1);
+  if (st.flags.heirConflictDone) heirEventDone++;
+  if (st.disciples.some((d) => d.role === 'HEIR' && !d.dead)) heirAliveAtDeath++;
+  if (st.disciples.some((d) => d.role === 'HEIR' && d.dead)) heirLostDead++;
   chronicleRoutes.set(ending.routeTag, (chronicleRoutes.get(ending.routeTag) || 0) + 1);
   chronicleEntrySum += ending.chronicle.length;
   milestoneSum += (st.milestones || []).length;
@@ -61,7 +82,41 @@ function recordChronicleStats(ending: ReturnType<typeof generatePostMortemEnding
     if (/[{}]|undefined|NaN/.test(text)) failures.push(`연대기 치환 누락: ${e.headline}`);
   });
   if (ending.chronicle.length < 3) failures.push(`연대기 장면 수 부족(${ending.chronicle.length}): ${ending.routeTag}`);
-  if (JSON.stringify(generatePostMortemEnding(st as never)) !== JSON.stringify(ending)) failures.push('같은 일생인데 연대기가 다르게 생성됨(비결정적)');
+  if (JSON.stringify(generatePostMortemEnding(st)) !== JSON.stringify(ending)) failures.push('같은 일생인데 연대기가 다르게 생성됨(비결정적)');
+}
+
+// 비교용: NO_DRAMA=1 로 돌리면 말썽·분쟁·반란을 끄고 같은 봇으로 기준선을 잰다.
+if (process.env.NO_DRAMA === '1') {
+  Object.values(DIFFICULTY_CONFIGS).forEach((c) => {
+    c.troubleDiscipleRate = 0; c.schemerRate = 0; c.troubleEventRate = 0; c.sectEventRate = 0; c.sectHostility = 0; c.plotRate = 0;
+  });
+  console.log('※ NO_DRAMA 기준선 모드: 문하생 기질·문파 사건을 모두 끈 상태');
+}
+
+// ---- 문파 관계 · 문하생 기질 검증용 ----
+const isDrama = (id: string) => /^(trouble_|sect_|rebellion_)/.test(id);
+const dramaOptionSeen = new Set<string>();
+// 말썽·분쟁 이벤트는 모든 갈래를 밟아 보도록 고르게 고른다. 다만 약할 때는 진검결투를 피한다(사람이라면 그럴 것이다).
+function pickDramaOption(ev: NonNullable<GameState['activeEvent']>, weakNow: boolean) {
+  const valid = ev.options.filter((o) => !o.disabled);
+  const safe = valid.filter((o) => !/진검/.test(o.label));
+  const pool = weakNow && safe.length > 0 ? safe : valid;
+  const chosen = pool[Math.floor(Math.random() * pool.length)] || ev.options[0];
+  dramaOptionSeen.add(chosen.id);
+  const text = `${ev.title}${ev.narration}${ev.dialogue || ''}${ev.options.map((o) => o.label + (o.hint || '')).join('')}`;
+  if (/undefined|NaN|\[object|【】/.test(text)) failures.push(`이벤트 문구 오류: ${ev.id} → ${text.match(/.{0,20}(undefined|NaN|\[object|【】).{0,20}/)?.[0]}`);
+  return chosen;
+}
+function checkWorldSanity(st: GameState, where: string) {
+  (st.sects || []).forEach((sc) => {
+    if (!Number.isFinite(sc.relation) || sc.relation < -100 || sc.relation > 100) failures.push(`문파 관계 값 이상(${where}): ${sc.name} ${sc.relation}`);
+    if (!Number.isFinite(sc.power)) failures.push(`문파 세력 값 이상(${where}): ${sc.name}`);
+  });
+  st.disciples.forEach((d) => {
+    if (!Number.isFinite(d.loyalty) || d.loyalty < 0 || d.loyalty > 100) failures.push(`충성 값 이상(${where}): ${d.name} ${d.loyalty}`);
+    if (!d.temperament) failures.push(`기질 없는 문하생(${where}): ${d.name}`);
+  });
+  if (!Number.isFinite(st.money) || !Number.isFinite(st.fame)) failures.push(`재화/명성 값 이상(${where})`);
 }
 
 const failures: string[] = [];
@@ -182,6 +237,7 @@ for (const strat of strategies) {
         // 전략별 성향 선택
         let pick = valid[0] || ev.options[0];
         if (strat === 'COMMERCE' && valid.length > 1 && Math.random() < 0.5) pick = valid[1];
+        if (isDrama(ev.id)) pick = pickDramaOption(ev, st.age < 30 || st.health < 55);
         st = resolveEventOption(st, ev, pick.id);
       }
 
@@ -360,7 +416,9 @@ console.log(`  • 만물객 이계 금서 출현율: ${grimHits}/200 (${(grimHi
 console.log('\n[TEST 4] 3단계 난이도(EASY / HARD / HELL) × 각 60회 = 180인생 밸런스 정량 분석');
 const diffs: DifficultyId[] = ['EASY', 'HARD', 'HELL'];
 for (const diff of diffs) {
-  const RUNS = 60;
+  const RUNS = Number(process.env.T4_RUNS || 60); // 밸런스를 맞출 때는 T4_RUNS=200처럼 늘려 편차를 줄인다
+  const evKinds = new Map<string, number>();
+  let lifeYears = 0;
   let sumAge = 0;
   let survive55 = 0;
   let natural = 0;
@@ -373,6 +431,19 @@ for (const diff of diffs) {
   let sumDeadDiscs = 0;
   let sumAliveDiscs = 0;
   let sumRealDuels = 0;
+  let sumTrouble = 0;
+  let sumSectEv = 0;
+  let sumRebellion = 0;
+  let livesWithRebellion = 0;
+  let sumRunaway = 0;
+  let sumLoyalty = 0;
+  let loyaltyN = 0;
+  let troubleN = 0;
+  let discN = 0;
+  let sumAllied = 0;
+  let sumSplinter = 0;
+  const stanceAtDeath = new Map<string, number>();
+  const dramaKinds = new Map<string, number>();
 
   for (let run = 0; run < RUNS; run++) {
     const c = countries[run % 3];
@@ -402,6 +473,23 @@ for (const diff of diffs) {
           chosen = opts.find((o) => o.id === 'debt_pay') || opts[0];
         } else if (st.activeEvent.id.includes('rival_4')) {
           chosen = opts.find((o) => o.id === 'rival_4_drink') || opts[0];
+        }
+        {
+          const kind = st.activeEvent.id
+            .replace(/^disciple_graduate_.*/, 'disciple_graduate')
+            .replace(/^grad_revisit_.*/, 'grad_revisit')
+            .replace(/^disciple_illness_.*/, 'disciple_illness')
+            .replace(/^disciple_passing_.*/, 'disciple_passing')
+            .replace(/^gift_disciple_.*/, 'gift_disciple')
+            .replace(/_\d+$/, '');
+          evKinds.set(kind, (evKinds.get(kind) || 0) + 1);
+        }
+        if (isDrama(st.activeEvent.id)) {
+          chosen = pickDramaOption(st.activeEvent, weakNow);
+          const kind = st.activeEvent.id.replace(/_\d+$/, '');
+          dramaKinds.set(kind, (dramaKinds.get(kind) || 0) + 1);
+          if (kind.startsWith('trouble_')) sumTrouble++;
+          else if (kind.startsWith('sect_')) sumSectEv++;
         }
         if (chosen) st = resolveEventOption(st, st.activeEvent, chosen.id);
       }
@@ -489,9 +577,23 @@ for (const diff of diffs) {
       const aliveD = st.disciples.filter((d) => !d.dead);
       if (aliveD.length >= 2) {
         st.disciples = st.disciples.map((d, idx) =>
-          d.dead ? d : { ...d, role: idx % 3 === 0 ? 'ESCORT' : 'STUDENT' }
+          d.dead || d.role === 'HEIR' ? d : { ...d, role: idx % 3 === 0 ? 'ESCORT' : 'STUDENT' } // 지명된 후계자의 역할은 건드리지 않는다
         );
       }
+
+      // 문파 외교·제자 면담 (형편이 될 때만): 사이가 가장 나쁜 문파에 예물, 충성이 가장 낮은 제자와 면담, 드러난 흑심은 파문
+      const metList = (st.sects || []).filter((sc) => sc.met);
+      if (metList.length > 0 && canDoDiplomacy(st) && st.money >= 450 && Math.random() < 0.5) {
+        const worst = [...metList].sort((a, b) => a.relation - b.relation)[0];
+        st = sendSectGift(st, worst.id);
+      }
+      if (canTalkToDisciple(st) && aliveD.length > 0) {
+        const lowest = [...aliveD].sort((a, b) => a.loyalty - b.loyalty)[0];
+        st = talkToDisciple(st, lowest.id);
+      }
+      const knownSchemer = st.disciples.find((d) => !d.dead && d.exposed && d.temperament === 'SCHEMER' && d.role !== 'HEIR');
+      if (knownSchemer && Math.random() < 0.3) st = expelDisciple(st, knownSchemer.id);
+      checkWorldSanity(st, `${diff} ${st.year}`);
 
       // 생존 중심 정상 플레이어 스케줄 (연구·조합·수련·휴식·호위 균형!)
       const unread = st.books.find((b) => !b.decoded && (!b.requiresMasteryLv || Math.max(...st.skills.map((s) => s.masteryLevel)) >= b.requiresMasteryLv) && (!b.requiresQi || st.stats.qi >= b.requiresQi));
@@ -510,6 +612,8 @@ for (const diff of diffs) {
       } else {
         acts = ['TRAIN', st.age >= 42 ? 'MIND' : 'BODY'];
       }
+      // 문하생이 있으면 제자 지도도 계획에 넣는다 (지도를 아예 안 하는 스승은 현실적이지 않다)
+      if (acts[0] !== 'REST' && st.disciples.some((d) => !d.dead) && st.turn % 2 === 0) acts.push('TEACH');
       const share = 1 / acts.length;
       for (let i = 0; i < acts.length; i++) {
         if (st.phase === 'ENDING') break;
@@ -534,6 +638,18 @@ for (const diff of diffs) {
     sumFame += st.fame;
     sumAliveDiscs += st.disciples.filter((d) => !d.dead).length;
     sumDeadDiscs += st.disciples.filter((d) => d.dead).length;
+    lifeYears += st.age - 20;
+    sumRebellion += st.flags.rebellions || 0;
+    if ((st.flags.rebellions || 0) > 0) livesWithRebellion++;
+    sumRunaway += (st.graduatedDisciples || []).filter((g) => g.fate === 'RIVAL_BETRAYER').length;
+    st.disciples.filter((d) => !d.dead).forEach((d) => { sumLoyalty += d.loyalty; loyaltyN++; });
+    st.disciples.forEach((d) => { discN++; if (isTroublemaker(d)) troubleN++; });
+    (st.sects || []).forEach((sc) => {
+      if (sc.kind === 'SPLINTER') sumSplinter++;
+      if (sc.allied) sumAllied++;
+      if (sc.met) { const k = getSectStance(sc); stanceAtDeath.set(k, (stanceAtDeath.get(k) || 0) + 1); }
+    });
+    checkWorldSanity(st, `${diff} 사망 시`);
   }
 
   console.log(
@@ -544,11 +660,39 @@ for (const diff of diffs) {
     `         ↳ 잔고 ${Math.round(sumMoney / RUNS)} (빚 ${Math.round(sumDebt / RUNS)}) | 명성 ${Math.round(sumFame / RUNS)} | ` +
       `생존제자 ${(sumAliveDiscs / RUNS).toFixed(1)}명 · 사망제자 ${(sumDeadDiscs / RUNS).toFixed(1)}명 | 진검결투 평균 ${(sumRealDuels / RUNS).toFixed(1)}회`
   );
+  console.log(
+    `         ↳ 말썽 ${(sumTrouble / RUNS).toFixed(1)}회 · 문파 사건 ${(sumSectEv / RUNS).toFixed(1)}회 · 반란 ${(sumRebellion / RUNS).toFixed(2)}회(겪은 일생 ${Math.round((livesWithRebellion / RUNS) * 100)}%) · ` +
+      `등 돌린 제자 ${(sumRunaway / RUNS).toFixed(1)}명 | 말썽꾼 비율 ${Math.round((troubleN / Math.max(1, discN)) * 100)}% · 평균 충성 ${(sumLoyalty / Math.max(1, loyaltyN)).toFixed(0)}`
+  );
+  console.log(
+    `         ↳ 사망 시 문파 관계: ${['HOSTILE', 'COLD', 'NEUTRAL', 'FRIENDLY', 'ALLIED'].map((k) => `${k} ${((stanceAtDeath.get(k) || 0) / RUNS).toFixed(1)}`).join(' · ')} | 동맹 ${(sumAllied / RUNS).toFixed(1)} · 분파 ${(sumSplinter / RUNS).toFixed(2)}`
+  );
+  const per10 = (k: string) => (((evKinds.get(k) || 0) / Math.max(1, lifeYears)) * 10).toFixed(2);
+  console.log(
+    `         ↳ 10년당 이벤트: 하산 ${per10('disciple_graduate')} · 재방문 ${per10('grad_revisit')} · 노환 ${per10('disciple_passing')} | ` +
+      `살수 ${per10('realduel_assassin')} · 재해 ${per10('disaster_nature')} · 역병 ${per10('disaster_plague')} · 열병 ${per10('hero_fever')} · 제자 중병 ${per10('disciple_illness')} · 도장깨기 ${per10('random_dojo_breaker')} | 전체 ${((Array.from(evKinds.values()).reduce((a, b) => a + b, 0) / Math.max(1, lifeYears)) * 10).toFixed(1)}`
+  );
+  console.log(`         ↳ 사건 종류: ${Array.from(dramaKinds.entries()).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${(v / RUNS).toFixed(1)}`).join(' · ')}`);
 }
 
+console.log(`\n  • 밟아 본 말썽·분쟁 선택지 ${dramaOptionSeen.size}종: ${Array.from(dramaOptionSeen).sort().join(', ')}`);
 console.log(`\n[TEST 5] 사후 연대기 조립 검증 (${chronicleRuns}인생)`);
 console.log(`  • 조립 경로(세평·규모·계승) ${chronicleRoutes.size}종 · 장면 구성이 서로 다른 연대기 ${chronicleSignatures.size}종`);
 console.log(`  • 평균 장면 수 ${(chronicleEntrySum / chronicleRuns).toFixed(1)} · 일생당 생전 사건 기록 ${(milestoneSum / chronicleRuns).toFixed(1)}건 · 원인 표시 중 연도까지 붙은 비율 ${chronicleCauseTotal ? Math.round((chronicleCauseWithYear / chronicleCauseTotal) * 100) : 0}%`);
+const pct = (key: keyof (typeof lifeSamples)[number], p: number) => {
+  const sorted = lifeSamples.map((x) => x[key]).sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+};
+console.log(`  • 사망 시 명성 분포 (10% / 25% / 50% / 75% / 90%): ${[0.1, 0.25, 0.5, 0.75, 0.9].map((p) => pct('fame', p)).join(' / ')}`);
+console.log(`  • 사망 시 생존 제자 수 분포: ${[0.1, 0.25, 0.5, 0.75, 0.9].map((p) => pct('alive', p)).join(' / ')}`);
+(['virtue', 'ruthless', 'commerce', 'ascetic', 'arcane'] as const).forEach((k) =>
+  console.log(`  • 세평 ${k.padEnd(8)} 분포: ${[0.1, 0.25, 0.5, 0.75, 0.9].map((p) => pct(k, p)).join(' / ')}`)
+);
+console.log(`  • 후계: 지명 이벤트 발생 ${heirEventDone}회 · 사망 시 후계자 생존 ${heirAliveAtDeath}회 · 후계자가 먼저 죽은 일생 ${heirLostDead}회`);
+const fmtMap = (m: Map<string, number>) => Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => `${k} ${v}`).join(' · ');
+console.log(`  • 규모 분포(난이도별): ${fmtMap(scaleByDifficulty)}`);
+console.log(`  • 세평 축 분포: ${fmtMap(axisCounts)}`);
+console.log(`  • 계승 분포: ${fmtMap(successionCounts)}`);
 console.log('  • 경로 상위:');
 Array.from(chronicleRoutes.entries()).sort((a, b) => b[1] - a[1]).slice(0, 12).forEach(([k, v]) => console.log(`     - ${k}: ${v}회`));
 console.log(`  • 등장한 개인 삽화 ${vignetteCounts.size} / ${VIGNETTES.length + 2}종 (각성 3형 포함):`);

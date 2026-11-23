@@ -27,6 +27,14 @@ export interface DifficultyConfig {
   disasterRate: number; // 자연재해·대역병·살수단 추가 발생률
   medicinePenalty: number; // 탕약 성공률 감소치
   agingWearMult: number; // 노화 건강 감소 배수
+  // 문하생 기질 · 타 문파
+  troubleDiscipleRate: number; // 새 문하생이 말썽꾼 기질일 확률
+  schemerRate: number; // 말썽꾼 가운데 흑심을 품은 자의 비율
+  troubleEventRate: number; // 계절마다 제자 말썽이 터질 기본 확률
+  sectEventRate: number; // 계절마다 문파 사건이 벌어질 기본 확률
+  sectHostility: number; // 타 문파의 기본 적의 (관계 초기값·목표값에서 뺀다)
+  plotRate: number; // 흑심의 계절당 진척 (0이면 반란 없음)
+  dramaGap: number; // 말썽·분쟁 이벤트 사이의 최소 간격 (턴)
   // 난이도 보상 (보람!)
   fameGainMult: number;
   expGainMult: number;
@@ -57,11 +65,18 @@ export const DIFFICULTY_CONFIGS: Record<DifficultyId, DifficultyConfig> = {
     disasterRate: 0,
     medicinePenalty: 0,
     agingWearMult: 1.0,
+    troubleDiscipleRate: 0.12,
+    schemerRate: 0,
+    troubleEventRate: 0.07,
+    sectEventRate: 0.12,
+    sectHostility: 0,
+    plotRate: 0,
+    dramaGap: 5,
     fameGainMult: 1.0,
     expGainMult: 1.0,
     summaryBullets: [
       '표준 경제 · 탕약 성공률 · 전투 난이도',
-      '호위 중 사고 없음 · 기존 서사 중심 체험',
+      '호위 중 사고 없음 · 문하생 대부분 올곧음 · 타 문파도 온건',
       '1회 완주 시 【지옥】 난이도 해금',
     ],
   },
@@ -83,17 +98,25 @@ export const DIFFICULTY_CONFIGS: Record<DifficultyId, DifficultyConfig> = {
     escortHeroDeathChance: 0.2,
     escortDiscipleCasualtyRate: 0.16,
     escortPassiveDeathRate: 0.042,
-    feverRate: 0.5,
-    discipleIllnessRate: 0.38,
-    disasterRate: 0.36,
+    feverRate: 0.355,
+    discipleIllnessRate: 0.25,
+    disasterRate: 0.265,
     medicinePenalty: 0.18,
     agingWearMult: 1.24,
+    troubleDiscipleRate: 0.4,
+    schemerRate: 0.18,
+    troubleEventRate: 0.19,
+    sectEventRate: 0.18,
+    sectHostility: 14,
+    plotRate: 4,
+    dramaGap: 3,
     fameGainMult: 1.25,
     expGainMult: 1.12,
     summaryBullets: [
       '수입 -34% · 유지비/약값/증축비 +42% · 빚 이자 35%',
       '호위 중 주인공·문하생 중상 및 전사 위험',
       '진검승부·자연재해·대역병 빈번 · 탕약 실패율↑',
+      '말썽꾼 문하생 다수 · 타 문파와의 시비·습격 · 흑심 품은 제자',
       '보상: 명성 +25% · 수련 +12% · 절처봉생 각성',
     ],
   },
@@ -115,17 +138,25 @@ export const DIFFICULTY_CONFIGS: Record<DifficultyId, DifficultyConfig> = {
     escortHeroDeathChance: 0.26,
     escortDiscipleCasualtyRate: 0.24,
     escortPassiveDeathRate: 0.068,
-    feverRate: 0.62,
-    discipleIllnessRate: 0.5,
-    disasterRate: 0.48,
+    feverRate: 0.435,
+    discipleIllnessRate: 0.27,
+    disasterRate: 0.335,
     medicinePenalty: 0.24,
     agingWearMult: 1.38,
+    troubleDiscipleRate: 0.58,
+    schemerRate: 0.26,
+    troubleEventRate: 0.27,
+    sectEventRate: 0.24,
+    sectHostility: 28,
+    plotRate: 6,
+    dramaGap: 2,
     fameGainMult: 1.5,
     expGainMult: 1.22,
     summaryBullets: [
       '수입 -44% · 지출 +58% · 빚 이자 45% 극한 압박',
       '대부분의 습격이 진검승부(패배 시 84% 즉사)',
       '매 계절 재해·역병·호위 전사 속출 · 탕약 실패율 대폭↑',
+      '문하생 절반이 말썽꾼 · 적대 문파의 습격 · 제자의 반란',
       '보상: 명성 +50% · 수련 +22% · 지옥 전용 업적·인장',
     ],
   },

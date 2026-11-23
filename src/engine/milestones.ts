@@ -17,7 +17,8 @@ const REPEAT_LIMIT: Record<string, number> = {
   GRADUATE_ORDINARY: 0,
   CHILD_BORN: 4,
   TOURNAMENT_WIN: 6,
-  HEIR_NAMED: 2,
+  HEIR_NAMED: 3,
+  HEIR_LOST: 2,
   HEIRLOOM: 2,
 };
 
@@ -70,7 +71,10 @@ export function diffMilestones(prev: GameState, next: GameState): LifeMilestone[
     const before = prev.disciples.find((p) => p.id === d.id);
     if (d.isChild && !before) add('CHILD_BORN', `자녀 ${josa(d.name, '이가')} 태어났다`);
     if (d.role === 'HEIR' && before?.role !== 'HEIR') add('HEIR_NAMED', `${josa(d.name, '을를')} 2대 종주로 세웠다`);
-    if (d.dead && before && !before.dead) add('DISCIPLE_DIED', `문하생 ${josa(d.name, '을를')} 잃었다`);
+    if (d.dead && before && !before.dead) {
+      if (before.role === 'HEIR') add('HEIR_LOST', `2대 종주로 세운 ${josa(d.name, '을를')} 먼저 떠나보냈다`);
+      else add('DISCIPLE_DIED', `문하생 ${josa(d.name, '을를')} 잃었다`);
+    }
     const mutated = d.skills.find((s) => s.isMutated && !before?.skills.some((p) => p.id === s.id));
     if (mutated) add('MUTATION', `제자 ${josa(d.name, '이가')} 스승의 초식을 변이시켜 ${josa(`「${mutated.customName || mutated.name}」`, '을를')} 창안했다`);
   });

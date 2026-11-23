@@ -76,14 +76,26 @@ export interface LineageFacts {
   milestones: LifeMilestone[];
 }
 
-// 같은 값이면 앞에 오는 축이 이긴다.
-const AXIS_ORDER: Array<{ axis: ChronicleAxis; key: keyof ReputationAxes }> = [
-  { axis: 'VIRTUE', key: 'virtue' },
-  { axis: 'ASCETIC', key: 'ascetic' },
-  { axis: 'COMMERCE', key: 'commerce' },
-  { axis: 'RUTHLESS', key: 'ruthless' },
-  { axis: 'ARCANE', key: 'arcane' },
+// 세평 축마다 쌓을 기회가 크게 다르다. 인덕은 올려 주는 선택지가 57곳(합계 873)인데 살기는 11곳(합계 180)뿐이라,
+// 수치를 그대로 비교하면 거의 모든 일생이 인덕으로 끝난다. 그래서 "얻을 수 있는 양에 견주어 얼마나 쌓았는가"로 비교한다.
+// opportunity = 인덕을 1로 둔 그 축의 획득 기회. 이벤트 고정 보상 합계 비율(1 : 0.49 : 0.29 : 0.21 : 0.22)에
+// 수련·호위를 할 때마다 조금씩 쌓이는 몫(구도, 상무)을 더해 잡은 값이다. 이벤트 보상을 손보면 이 값도 함께 고쳐야 한다.
+// 같은 점수면 앞에 오는 축이 이긴다.
+const AXIS_ORDER: Array<{ axis: ChronicleAxis; key: keyof ReputationAxes; opportunity: number }> = [
+  { axis: 'VIRTUE', key: 'virtue', opportunity: 1 },
+  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.65 },
+  { axis: 'COMMERCE', key: 'commerce', opportunity: 0.35 },
+  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.2 },
+  { axis: 'ARCANE', key: 'arcane', opportunity: 0.2 },
 ];
+// 보조 축으로 인정하는 최소 원점수. 한두 번의 선택으로 "겸비"가 붙지 않게 한다.
+const SECOND_AXIS_MIN_RAW = 30;
+
+// 규모 기준. 한 일생을 끝까지 산 도장의 사망 시 명성은 대개 2,500~3,700이고(플레이테스트 봇 330회 기준),
+// 일찍 죽거나 지옥 난이도면 수백~1,500에 머문다.
+const SCALE_GRAND = { fame: 3000, disciples: 12 };
+const SCALE_MEDIUM = { fame: 700, disciples: 3 };
+const FLOURISH_SHARE = 0.28;
 
 function hashString(s: string): number {
   let h = 2166136261;
@@ -131,21 +143,27 @@ export function extractLineageFacts(state: GameState): LineageFacts {
 
   // 규모
   const scale: ScaleTier =
-    state.fame >= 220 && alive.length >= 4 ? 'GRAND' : state.fame >= 90 && alive.length >= 1 ? 'MEDIUM' : 'SMALL';
+    state.fame >= SCALE_GRAND.fame && alive.length >= SCALE_GRAND.disciples
+      ? 'GRAND'
+      : state.fame >= SCALE_MEDIUM.fame && alive.length >= SCALE_MEDIUM.disciples
+      ? 'MEDIUM'
+      : 'SMALL';
 
-  // 세평 축: 값이 높은 순. 마법을 쓴 적이 없으면 마도 축은 후보에서 뺀다.
+  // 세평 축: 획득 기회로 보정한 점수가 높은 순. 마법을 쓴 적이 없으면 마도 축은 후보에서 뺀다.
   const ranked = AXIS_ORDER.filter((a) => a.axis !== 'ARCANE' || magic !== 'NONE')
-    .map((a, i) => ({ axis: a.axis, val: rep[a.key], i }))
+    .map((a, i) => ({ axis: a.axis, raw: rep[a.key], val: rep[a.key] / a.opportunity, i }))
     .sort((a, b) => b.val - a.val || a.i - b.i);
   let axis = ranked[0].axis;
   // 이적을 공개하고 마도 세평이 뚜렷하면, 다른 축이 조금 더 높아도 세상은 그 유파를 마도로 기억한다.
   if (magic === 'PUBLIC' && rep.arcane >= 50) axis = 'ARCANE';
   const runnerUp = ranked.find((r) => r.axis !== axis);
   const topVal = ranked.find((r) => r.axis === axis)?.val || 0;
-  const secondAxis = runnerUp && runnerUp.val >= 50 && runnerUp.val >= topVal * 0.6 ? runnerUp.axis : null;
+  const secondAxis = runnerUp && runnerUp.raw >= SECOND_AXIS_MIN_RAW && runnerUp.val >= topVal * 0.6 ? runnerUp.axis : null;
 
   // 계승 상태
-  const hasMutation = alive.some((d) => d.skills.some((s) => s.isMutated));
+  // 청출어람: 변이 초식을 낸 제자가 한둘이 아니라 문하의 큰 줄기를 이룰 때만 (3명 이상이면서 생존 제자의 28% 이상)
+  const mutatorCount = alive.filter((d) => d.skills.some((s) => s.isMutated)).length;
+  const hasMutation = mutatorCount >= 3 && mutatorCount >= alive.length * FLOURISH_SHARE;
   const loyalGraduates = graduates.filter((g) => g.fate !== 'RIVAL_BETRAYER');
   let succession: SuccessionState;
   if (heirD) {
@@ -229,7 +247,9 @@ export function extractLineageFacts(state: GameState): LineageFacts {
   };
 }
 
-// 원인 표시용: 접두어가 맞는 가장 이른 생전 사건을 찾는다. 구버전 세이브처럼 기록이 없으면 null.
-export function findMilestone(facts: LineageFacts, keyPrefix: string): LifeMilestone | null {
-  return facts.milestones.find((m) => m.key.startsWith(keyPrefix)) || null;
+// 원인 표시용: 접두어가 맞는 생전 사건을 찾는다. 기본은 가장 이른 것, latest면 가장 나중 것.
+// 구버전 세이브처럼 기록이 없으면 null.
+export function findMilestone(facts: LineageFacts, keyPrefix: string, latest = false): LifeMilestone | null {
+  const matches = facts.milestones.filter((m) => m.key.startsWith(keyPrefix));
+  return (latest ? matches[matches.length - 1] : matches[0]) || null;
 }

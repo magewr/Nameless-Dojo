@@ -57,17 +57,12 @@ import {
 import { computeSectTitle, COUNTRIES, SEASON_META } from '../data/worldAndEndings';
 import { createBattleConfig, createDiscipleEntity, getRewardWeaponForDemon, pickSeasonalEvent } from '../data/events';
 import { loadLegacyRecords } from './storage';
+import { createInitialSects, worstSect } from '../data/sects';
+import { getTrainingMult } from '../data/temperament';
+import { adjustRelation, applySectBattleFollowup, resolveSectEvent, settleDisciplesAndSects, syncRivalSect } from './sectLogic';
 
-export function addLog(state: GameState, text: string, type: LogEntry['type'] = 'NORMAL'): GameState {
-  const entry: LogEntry = {
-    id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    year: state.year,
-    season: state.season,
-    text,
-    type,
-  };
-  return { ...state, logs: [entry, ...state.logs].slice(0, 60) };
-}
+import { addLog } from './log';
+export { addLog };
 
 export function createNewGame(
   country: CountryId,
@@ -129,6 +124,7 @@ export function createNewGame(
     weapons: startingWeapons,
     equippedWeaponId: startingWeapons[0].id,
     disciples: [],
+    sects: createInitialSects(country, cMeta.rivalTemplate.name, difficulty),
     taughtSkillIds: ['base_h_slash', 'base_v_slash'],
     spouse: null,
     rival: { ...cMeta.rivalTemplate, age: startAge + 1 },
@@ -1025,7 +1021,8 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
 
   next.disciples = next.disciples.map((d) => {
     if (d.dead) return d;
-    let updatedSkills = d.skills.map((s) => gainSkillExp(s, Math.round(discipleExp * (d.isGenius ? 1.45 : 1.0))).updated);
+    // 성실한 제자는 더 빨리, 나태한 제자는 더디게 는다.
+    let updatedSkills = d.skills.map((s) => gainSkillExp(s, Math.round(discipleExp * (d.isGenius ? 1.45 : 1.0) * getTrainingMult(d))).updated);
 
     // 청출어람 변이 체크 (천재 제자 + Lv.5 이상 보유 + 아직 변이 없음)
     if (d.isGenius && !updatedSkills.some((s) => s.isMutated) && Math.random() < 0.12) {
@@ -1047,9 +1044,9 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
       }
     }
 
+    // 나이는 위(2. 노화 정산)에서 이미 한 살 먹였다. 여기서 또 올리면 제자만 한 해에 두 살씩 늙는다.
     return {
       ...d,
-      age: isNewYear ? d.age + 1 : d.age,
       skills: updatedSkills,
     };
   });
@@ -1057,6 +1054,9 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
   mutationLogs.forEach((m) => {
     next = addLog(next, m, 'MAGIC');
   });
+
+  // 4.5 문하생 기질에 따른 충성 정산 · 흑심의 진척 · 타 문파와의 관계 표류
+  next = settleDisciplesAndSects(next, isNewYear);
 
   // 5. 봄/명성 기반 자연 입문 지원자 (정원 여유 시)
   const maxD = getMaxDisciples(next.facilities);
@@ -1134,6 +1134,10 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
   const baseScale = Math.min(3.15, 0.72 + Math.sqrt(Math.max(1, state.turn)) * 0.165 + Math.sqrt(Math.max(0, state.fame)) * 0.028);
   const scale = Math.min(4.2, baseScale * diffCfg.enemyScaleMult);
 
+  // 타 문파 사건 · 문하생 말썽 · 반란, 그리고 기존 이벤트에 끼어드는 문파의 선택지는 따로 처리한다.
+  const sectHandled = resolveSectEvent(next, event, optionId, scale);
+  if (sectHandled) return sectHandled;
+
   switch (optionId) {
     // ★ [어려움 / 지옥] 신규 자연재해 · 진검 암습 · 진검 도장깨기 처리! ★
     case 'disaster_pay': {
@@ -1172,7 +1176,11 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
         `b_ambush_${state.turn}`, '살수단 두목 — 진검 야습', '⚠ 패배 시 사망/영구장애', true,
         '피의 살수 두목', '암살단 두목', 34, 'RUSHDOWN', Math.max(1.1, scale * 1.04), 'BLADE',
         ['sk_jp_03', 'sk_jp_06', 'sk_cn_07'],
-        { rewardMoney: Math.round(75 + scale * 32), rewardFame: 55 }
+        {
+          rewardMoney: Math.round(75 + scale * 32),
+          rewardFame: 55,
+          ...(event.meta?.sectId ? { eventFollowupId: `sect_duel|${event.meta.sectId}` } : {}),
+        }
       );
       next.phase = 'BATTLE';
       return next;
@@ -1227,6 +1235,8 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
             ? 'SUCCESSFUL'
             : 'ORDINARY';
         const topSk = [...d.skills].sort((a, b) => b.masteryLevel - a.masteryLevel)[0];
+        // 원한을 품고 떠난 제자는 사이가 나쁜 문파에 몸을 의탁한다.
+        const refuge = fate === 'RIVAL_BETRAYER' ? worstSect(next, -15) : null;
         next.disciples = next.disciples.filter((x) => x.id !== d.id);
         next.graduatedDisciples = [
           ...(next.graduatedDisciples || []),
@@ -1240,6 +1250,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
             powerScore: statSum,
             fate,
             topSkillName: topSk?.customName || topSk?.name || '횡베기',
+            joinedSectName: refuge?.name,
           },
         ];
         return addLog(
@@ -1650,7 +1661,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
 
     case 'accept_first':
     case 'accept_strict': {
-      const firstD = createDiscipleEntity(next, { name: cMeta.discipleNames[0], archetype: '우직한 농부 아들', isGenius: false });
+      const firstD = createDiscipleEntity(next, { name: cMeta.discipleNames[0], archetype: '우직한 농부 아들', isGenius: false, temperament: 'UPRIGHT' });
       if (optionId === 'accept_strict') firstD.tuition = 14;
       next.disciples = [...next.disciples, firstD];
       next.flags = { ...next.flags, hasHadFirstDisciple: true };
@@ -1688,7 +1699,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     }
 
     case 'gift_book_return': {
-      const d = createDiscipleEntity(next, { archetype: '몰락 무가의 후예', isGenius: true });
+      const d = createDiscipleEntity(next, { archetype: '몰락 무가의 후예', isGenius: true, temperament: 'UPRIGHT' });
       d.loyalty = 100;
       next.disciples = [...next.disciples, d];
       next.fame += 20;
@@ -1711,7 +1722,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     }
 
     case 'gift_weapon_keep': {
-      const d = createDiscipleEntity(next, { archetype: '방랑 무사', isGenius: true });
+      const d = createDiscipleEntity(next, { archetype: '방랑 무사', isGenius: true, temperament: 'UPRIGHT' });
       d.loyalty = 100;
       d.stats = { ...d.stats, str: d.stats.str + 6, agi: d.stats.agi + 6, ins: d.stats.ins + 4 };
       next.disciples = [...next.disciples, d];
@@ -1799,6 +1810,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     case 'rival_1_tea':
       next.rival = { ...next.rival, act: 1, friendship: next.rival.friendship + 10 };
       next.reputation = { ...next.reputation, ascetic: next.reputation.ascetic + 5 };
+      next = syncRivalSect(next, 8, '도장주끼리 차를 나누며 다음을 기약했다');
       return addLog(next, `${next.rival.name}과(와) 차를 나누며 다음 대결을 기약했다.`, 'NORMAL');
 
     case 'rival_2_fight':
@@ -1813,6 +1825,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     case 'rival_2_decline':
       next.rival = { ...next.rival, act: 2, friendship: next.rival.friendship + 15 };
       next.reputation = { ...next.reputation, ascetic: next.reputation.ascetic + 10 };
+      next = syncRivalSect(next, 10, '도장주끼리 서로의 성장을 인정했다');
       return addLog(next, `${next.rival.name}과(와) 서로의 성장을 인정하며 웃어 보였다.`, 'GOOD');
 
     case 'rival_3_disciple':
@@ -1845,6 +1858,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       next.flags = { ...next.flags, rivalFarewellDone: true };
       next.stats = { ...next.stats, wil: next.stats.wil + 10, ins: next.stats.ins + 6 };
       next.reputation = { ...next.reputation, ascetic: next.reputation.ascetic + 20 };
+      next = syncRivalSect(next, 40, `두 사람이 겨울밤 술잔을 나누며 반백 년의 앙금을 풀었다`);
       return addLog(next, `눈 내리는 겨울밤, ${next.rival.name}과(와) 새벽까지 술잔을 기울이며 50년 세월을 회고했다. 그는 이듬해 봄 조용히 눈을 감았다.`, 'MAGIC');
 
     // 가족
@@ -1906,7 +1920,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     case 'heir_pick_disciple':
     case 'heir_pick_child': {
       const targetId = (optionId === 'heir_pick_disciple' ? event.meta?.discipleId : event.meta?.childId) as string;
-      next.flags = { ...next.flags, heirConflictDone: true };
+      next.flags = { ...next.flags, heirConflictDone: true, heirAskedYear: next.year };
       next.disciples = next.disciples.map((d) => ({
         ...d,
         role: d.id === targetId ? 'HEIR' : d.role === 'HEIR' ? 'INSTRUCTOR' : d.role,
@@ -1914,6 +1928,9 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       const picked = next.disciples.find((d) => d.id === targetId);
       return addLog(next, `${picked?.name || '후계자'}을(를) 【${next.sectName}】의 공식 2대 종주(후계자)로 선포했다!`, 'MAGIC');
     }
+    case 'heir_postpone':
+      next.flags = { ...next.flags, heirAskedYear: next.year };
+      return addLog(next, '후계자 지명을 뒤로 미뤘다. 문하생들 사이에 말 없는 불안이 감돈다.', 'WARN');
 
     // 역사 이벤트
     case 'kr_sinbo_share': {
@@ -2149,17 +2166,22 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     case 'breaker_fight':
     case 'breaker_fight_real': {
       const isReal = optionId === 'breaker_fight_real';
+      const fromSect = (next.sects || []).find((sc) => sc.id === event.meta?.sectId);
       next.pendingBattle = createBattleConfig(
         `b_breaker_${state.turn}`,
         isReal ? '진검 도장깨기 결투' : '도장깨기 비무',
         isReal ? '⚠ 패배 시 사망/영구장애' : '현판을 건 자존심 대결',
         isReal,
-        isReal ? '살기 띤 도장깨기 검객' : '타 문파 도전자',
-        isReal ? '진검 도전자' : '도장깨기 무사',
+        fromSect ? fromSect.champion : isReal ? '살기 띤 도장깨기 검객' : '타 문파 도전자',
+        fromSect ? `${fromSect.name.replace(/\(.*?\)/g, '')} 대표 무사` : isReal ? '진검 도전자' : '도장깨기 무사',
         25 + Math.floor(Math.random() * 18),
         (['AGGRESSIVE', 'DUELIST', 'HEAVY', 'RUSHDOWN'] as const)[Math.floor(Math.random() * 4)],
         scale, 'BLADE', ['sk_kr_01', 'sk_cn_01', 'sk_jp_03'],
-        { rewardMoney: Math.round((isReal ? 55 : 35) + scale * 25), rewardFame: Math.round((isReal ? 38 : 20) + scale * 12) }
+        {
+          rewardMoney: Math.round((isReal ? 55 : 35) + scale * 25),
+          rewardFame: Math.round((isReal ? 38 : 20) + scale * 12),
+          ...(fromSect ? { eventFollowupId: `sect_duel|${fromSect.id}` } : {}),
+        }
       );
       next.phase = 'BATTLE';
       return next;
@@ -2167,6 +2189,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     case 'breaker_ignore':
       next.fame = Math.max(0, next.fame - 8);
       next.reputation = { ...next.reputation, ascetic: next.reputation.ascetic + 5 };
+      next = adjustRelation(next, event.meta?.sectId as string | undefined, -3, '도전을 피하자 더 얕보기 시작했다');
       return addLog(next, '도장깨기를 무시하고 돌려보냈다. 명성이 소폭 하락했다.', 'WARN');
 
     case 'insp_train': {
@@ -3066,6 +3089,17 @@ export interface BattleOutcomePayload {
 
 // 실시간 전투 종료 후 상태 정산
 export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePayload): GameState {
+  const battle = state.pendingBattle;
+  let after = applyBattleOutcomeCore(state, outcome);
+  // 숙적과 칼을 맞대면 두 문파 사이도 팽팽해진다.
+  if (battle?.isRivalBattle && after.phase !== 'ENDING') {
+    after = syncRivalSect(after, outcome.victory ? -4 : -2, outcome.victory ? '도장주끼리의 비무에서 패해 자존심이 상했다' : '도장주끼리의 비무에서 이겨 기세가 올랐다');
+  }
+  // 타 문파·반란과 얽힌 싸움의 뒷일 (관계 변화, 반란 무리의 처분 등)
+  return applySectBattleFollowup(battle, after, outcome.victory);
+}
+
+function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload): GameState {
   const battle = state.pendingBattle;
   if (!battle) return { ...state, phase: 'MAIN' };
 
