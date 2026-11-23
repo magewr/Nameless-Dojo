@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { BattleConfig, BattleTactic, Disciple, GameState, Skill, Stats, Weapon } from '../types/game';
 import { BattleOutcomePayload } from '../engine/gameLogic';
 import { simulateAutoBattleQuick } from '../engine/autoBattleSim';
+import { getBattleOverlayResultCopy } from '../data/battleDialogue';
 import { sound } from '../engine/sound';
 import {
   getEnemyFightGridSrc,
@@ -2783,33 +2784,29 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         }`}
       >
         <canvas ref={canvasRef} width={viewW} height={viewH} className="pixel-canvas w-full h-full block" />
-        {stage === 'RESULT' && resultOutcome && (
-          <div className="absolute inset-0 bg-black/75 flex items-center justify-center p-3 sm:p-4 animate-ink">
-            <div className="rpg-window max-w-md w-full p-4 sm:p-6 text-center space-y-3">
-              <h3 className={`text-2xl sm:text-3xl font-bold ${battle.spectatorMode ? 'text-[#fde68a]' : resultOutcome.victory ? 'text-[#fde68a]' : 'text-rose-400'}`}>
-                {battle.spectatorMode
-                  ? '★ 절정 비무 종료 ★'
-                  : resultOutcome.victory
-                  ? '★ 승 리 (勝利) ★'
-                  : '패 배 (敗北)'}
-              </h3>
-              <p className="text-xs sm:text-sm text-[#e6d8be]">
-                {battle.spectatorMode
-                  ? `${resultOutcome.victory ? p?.name : e?.name}의 승리! 두 절정 고수의 초식에서 깊은 깨달음을 얻었다.`
-                  : resultOutcome.victory
-                  ? `【${p?.sectTitle}】 ${p?.name}의 무술이 상대를 제압했다! (간파 ${resultOutcome.justParriesCount}회)`
-                  : battle.isRealDuel
-                  ? '진검결투에서 쓰러졌다… 운명의 판정이 기다린다.'
-                  : battle.isTournament
-                  ? `${battle.title}에서 아쉽게 패배했다.`
-                  : '아쉬운 패배였다. 초식을 더 갈고닦자.'}
-              </p>
-              <button onClick={() => onFinish(resultOutcome)} className="w-full seal-badge py-2.5 sm:py-3 font-bold text-sm cursor-pointer flex items-center justify-center gap-2">
-                <Play className="w-4 h-4" /> {battle.spectatorMode ? '다음 무대로 ▶' : '결과 확인 ▶'}
-              </button>
+        {stage === 'RESULT' && resultOutcome && (() => {
+          const winnerName = resultOutcome.victory ? (p?.name || state.name) : (e?.name || battle.enemyName);
+          const copy = getBattleOverlayResultCopy(battle, state, resultOutcome.victory, winnerName, resultOutcome.justParriesCount);
+          return (
+            <div className="absolute inset-0 bg-black/75 flex items-center justify-center p-3 sm:p-4 animate-ink">
+              <div className="rpg-window max-w-md w-full p-4 sm:p-6 text-center space-y-3">
+                <h3 className={`text-2xl sm:text-3xl font-bold ${battle.spectatorMode ? 'text-[#fde68a]' : resultOutcome.victory ? (battle.isRealDuel ? 'text-amber-300' : 'text-[#fde68a]') : 'text-rose-400'}`}>
+                  {copy.headline}
+                </h3>
+                <p className="text-xs sm:text-sm text-[#e6d8be]">{copy.subline}</p>
+                {copy.enemyQuote && (
+                  <div className="bg-[#1b120c] border border-[#6b4728] px-3 py-2 text-left space-y-0.5">
+                    <div className="text-[10px] font-bold text-amber-300">{battle.enemyName}</div>
+                    <p className="text-xs text-[#f5e9ce] italic leading-relaxed">{copy.enemyQuote}</p>
+                  </div>
+                )}
+                <button onClick={() => onFinish(resultOutcome)} className="w-full seal-badge py-2.5 sm:py-3 font-bold text-sm cursor-pointer flex items-center justify-center gap-2">
+                  <Play className="w-4 h-4" /> {copy.ctaLabel}
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* 모바일 세로 전용 실시간 공방 중계 로그 + 하단 장착 초식 덱 */}

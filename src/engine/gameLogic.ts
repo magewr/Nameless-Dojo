@@ -1,6 +1,8 @@
 import {
   ActiveEvent,
   BattleConfig,
+  BattleEnemyKind,
+  BloodGrudge,
   Book,
   CountryId,
   DifficultyId,
@@ -59,7 +61,9 @@ import { createBattleConfig, createDiscipleEntity, getRewardWeaponForDemon, pick
 import { loadLegacyRecords } from './storage';
 import { createInitialSects, worstSect } from '../data/sects';
 import { getTrainingMult } from '../data/temperament';
-import { adjustRelation, applySectBattleFollowup, resolveSectEvent, settleDisciplesAndSects, syncRivalSect } from './sectLogic';
+import { adjustPower, adjustRelation, applySectBattleFollowup, rebellionCrushed, resolveSectEvent, settleDisciplesAndSects, syncRivalSect } from './sectLogic';
+import { buildDetailedVictoryConclusion, buildRealDuelAftermathEvent, pickAvengerProfile } from '../data/battleDialogue';
+import { josa } from '../utils/korean';
 
 import { addLog } from './log';
 export { addLog };
@@ -148,6 +152,7 @@ export function createNewGame(
       forbiddenCastCount: 0,
       realDuelWins: 0,
       realDuelKills: 0,
+      bloodGrudges: [],
       wroteManual: false,
       royalAlliance: false,
       westernFear: false,
@@ -1109,7 +1114,8 @@ export function rollMidSeasonEvent(state: GameState): ActiveEvent | null {
 
 // 이벤트 선택지 처리기
 export function resolveEventOption(state: GameState, event: ActiveEvent, optionId: string): GameState {
-  const triggered = Array.from(new Set([...state.flags.triggeredEvents, event.id]));
+  const isAftermath = event.id.startsWith('duel_aftermath_');
+  const triggered = isAftermath ? state.flags.triggeredEvents : Array.from(new Set([...state.flags.triggeredEvents, event.id]));
   // 최근 6턴 발동 이벤트 계열 기록 → 같은 반복 이벤트 도배 원천 차단!
   const baseKey = event.id
     .replace(/_\d+$/, '')
@@ -1117,10 +1123,11 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     .replace(/^grad_revisit_.*/, 'grad_revisit')
     .replace(/^disciple_illness_.*/, 'disciple_illness')
     .replace(/^disciple_passing_.*/, 'disciple_passing')
-    .replace(/^hero_fever_.*/, 'hero_fever');
+    .replace(/^hero_fever_.*/, 'hero_fever')
+    .replace(/^blood_grudge_.*/, 'blood_grudge');
   const prevRecent = state.flags.recentEventBases || [];
   const coolLimit = getDifficultyId(state) === 'HELL' ? 2 : getDifficultyId(state) === 'HARD' ? 3 : 6;
-  const nextRecent = [baseKey, ...prevRecent.filter((k) => k !== baseKey)].slice(0, coolLimit);
+  const nextRecent = isAftermath ? prevRecent : [baseKey, ...prevRecent.filter((k) => k !== baseKey)].slice(0, coolLimit);
 
   let next: GameState = {
     ...state,
@@ -1269,16 +1276,18 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       return addLog(next, '제자를 사범으로 붙잡아 두었다. (충성도 소폭 하락)', 'NORMAL');
     }
 
-    case 'grad_betray_fight': {
+    case 'grad_betray_fight':
+    case 'grad_betray_real_fight': {
+      const isReal = optionId === 'grad_betray_real_fight';
       const gId = event.meta?.gradId as string | undefined;
       const gName = (event.meta?.gradName as string) || '배신한 옛 제자';
       const gPow = (event.meta?.gradPower as number) || 150;
       next.graduatedDisciples = (next.graduatedDisciples || []).map((g) => (g.id === gId ? { ...g, revisited: true } : g));
       next.pendingBattle = createBattleConfig(
         `b_betray_${next.turn}`,
-        `배신한 옛 제자 — ${gName}`,
-        '스승의 가르침을 등지고 적으로 돌아온 옛 문하생과의 대결',
-        false,
+        isReal ? `배신한 옛 제자 — ${gName} (진검)` : `배신한 옛 제자 — ${gName}`,
+        isReal ? '⚠ 패배 시 사망/영구장애 · 사문(師門)의 피의 법도' : '스승의 가르침을 등지고 적으로 돌아온 옛 문하생과의 대결',
+        isReal,
         gName,
         '사파 배신자',
         32,
@@ -1286,7 +1295,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
         Math.max(1.15, Math.min(2.6, gPow / 95)),
         'BLADE',
         ['sig_cross_slash', 'sk_jp_02', 'sk_kr_06'],
-        { rewardMoney: 80, rewardFame: 55 }
+        { rewardMoney: isReal ? 100 : 80, rewardFame: isReal ? 75 : 55, enemyKind: 'BETRAYER_DISCIPLE' }
       );
       next.phase = 'BATTLE';
       return next;
@@ -2059,10 +2068,211 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       next.pendingBattle = createBattleConfig(
         'b_demon', '낭인 검귀 — 사생결단', '⚠ 패배 시 사망/영구장애', true,
         '피의 낭인 검귀', '살인검객', 38, 'AGGRESSIVE', Math.max(1.3, scale), 'BLADE', ['sk_jp_06', 'sk_jp_03'],
-        { rewardMoney: 110, rewardFame: 55, rewardWeaponId: getRewardWeaponForDemon(scale)?.id }
+        { rewardMoney: 110, rewardFame: 55, rewardWeaponId: getRewardWeaponForDemon(scale)?.id, enemyKind: 'DEMON' }
       );
       next.phase = 'BATTLE';
       return next;
+    case 'revenge_son_duel':
+      next.pendingBattle = createBattleConfig(
+        'b_revenge_son', '스무 해 전 원수의 아들 — 진검결투', '⚠ 패배 시 사망/영구장애 · 이십 년의 원한', true,
+        '원수의 아들', '복수의 검객', 32, 'DUELIST', Math.max(1.45, scale * 1.05), 'BLADE', ['sk_jp_03', 'sk_jp_06', 'sk_kr_06'],
+        { rewardMoney: 90, rewardFame: 60, enemyKind: 'BLOOD_AVENGER' }
+      );
+      next.phase = 'BATTLE';
+      return next;
+    case 'grudge_duel': {
+      const grudgeId = event.meta?.grudgeId as string | undefined;
+      const avengerName = (event.meta?.avengerName as string) || '복수의 혈귀';
+      const victimName = (event.meta?.victimName as string) || '옛 원수';
+      const avengerRelation = (event.meta?.avengerRelation as string) || '혈연';
+      const killedYear = Number(event.meta?.killedYear || next.year - 5);
+      const sectId = event.meta?.sectId as string | undefined;
+      next.flags = {
+        ...next.flags,
+        bloodGrudges: (next.flags.bloodGrudges || []).map((g) => (g.id === grudgeId ? { ...g, resolved: true } : g)),
+      };
+      next.pendingBattle = createBattleConfig(
+        `b_grudge_${grudgeId || next.turn}`,
+        `복수의 혈귀 — ${avengerName}`,
+        `⚠ 진검결투 · ${victimName}의 ${avengerRelation}`,
+        true,
+        avengerName,
+        '복수의 혈귀',
+        28 + Math.floor(Math.random() * 14),
+        'AGGRESSIVE',
+        Math.max(1.35, scale * 1.08),
+        'BLADE',
+        ['sk_jp_06', 'sk_jp_03', 'sk_kr_06'],
+        {
+          rewardMoney: 95,
+          rewardFame: 65,
+          enemyKind: 'BLOOD_AVENGER',
+          grudgeMeta: { grudgeId, victimName, avengerRelation, killedYear, sectId },
+          canUseDisciple: false,
+        }
+      );
+      next.phase = 'BATTLE';
+      return next;
+    }
+    case 'grudge_atone': {
+      const grudgeId = event.meta?.grudgeId as string | undefined;
+      const avengerName = (event.meta?.avengerName as string) || '복수의 혈귀';
+      next.flags = {
+        ...next.flags,
+        bloodGrudges: (next.flags.bloodGrudges || []).map((g) => (g.id === grudgeId ? { ...g, resolved: true } : g)),
+      };
+      next.health = Math.max(8, next.health - 16);
+      next.fame = Math.max(0, next.fame - 12);
+      next.reputation = {
+        ...next.reputation,
+        virtue: next.reputation.virtue + 25,
+        ascetic: next.reputation.ascetic + 18,
+      };
+      return addLog(next, `복수의 혈귀 ${josa(avengerName, '을를')} 베지 않고 온몸으로 칼등을 받아 내어 피의 원한을 끊었다. (건강 -16, 인덕 +25, 구도 +18)`, 'MAGIC');
+    }
+    case 'grudge_disarm': {
+      const grudgeId = event.meta?.grudgeId as string | undefined;
+      const avengerName = (event.meta?.avengerName as string) || '복수의 혈귀';
+      next.flags = {
+        ...next.flags,
+        bloodGrudges: (next.flags.bloodGrudges || []).map((g) => (g.id === grudgeId ? { ...g, resolved: true } : g)),
+      };
+      next.fame = Math.max(0, next.fame - 18);
+      next.authority = Math.max(0, next.authority - 12);
+      return addLog(next, `제자들과 포위해 복수의 혈귀 ${josa(avengerName, '을를')} 몰아냈다. 목숨은 지켰으나 명성에 흠이 갔다. (명성 -18, 위엄 -12)`, 'WARN');
+    }
+
+    // ★ 진검전투 승리 직후 상대방 처분 선택지 (사살 → 복수의 혈귀 씨앗 / 방면 → 인덕·원한 종결 / 반란 속죄 강등) ★
+    case 'aftermath_execute': {
+      const enemyName = (event.meta?.enemyName as string) || '적';
+      const enemyTitle = (event.meta?.enemyTitle as string) || '검객';
+      const kind = ((event.meta?.enemyKind as BattleEnemyKind) || 'BREAKER');
+      const sectId = event.meta?.sectId as string | undefined;
+      const leaderId = event.meta?.leaderId as string | undefined;
+      const followerIds = (event.meta?.followerIds as string[]) || [];
+
+      const fameBonus = kind === 'GRANDMASTER' ? 35 : kind === 'OFFICER' ? 25 : kind === 'BETRAYER_DISCIPLE' || kind === 'BLOOD_AVENGER' ? 20 : 15;
+      const ruthlessBonus = kind === 'OFFICER' ? 28 : kind === 'GRANDMASTER' ? 25 : kind === 'DEBT' ? 24 : 20;
+      const authBonus = kind === 'REBEL_DISCIPLE' ? 14 : kind === 'GRANDMASTER' ? 10 : kind === 'SECT_DUEL' || kind === 'SECT_RAID' || kind === 'BETRAYER_DISCIPLE' ? 8 : 6;
+
+      next.fame += fameBonus;
+      next.authority += authBonus;
+      next.reputation = {
+        ...next.reputation,
+        ruthless: next.reputation.ruthless + ruthlessBonus,
+        ...(kind === 'OFFICER' ? { arcane: next.reputation.arcane + 20 } : {}),
+      };
+      if (kind === 'DEBT') next.money += 70;
+
+      // 반란 제자 처형 확정
+      if (kind === 'REBEL_DISCIPLE' && leaderId) {
+        next = rebellionCrushed(next, leaderId, followerIds, true);
+      }
+
+      // 타 문파 인물 사살 시 불구대천의 원한
+      if (sectId && (kind === 'SECT_DUEL' || kind === 'SECT_RAID' || kind === 'SECT_AID' || kind === 'ASSASSIN')) {
+        next = adjustRelation(next, sectId, -25, `진검결투 끝에 ${josa(enemyName, '을를')} 베어 죽여 피의 원한이 맺혔다`);
+        next = adjustPower(next, sectId, -8);
+      }
+
+      // ★ 복수의 혈귀 씨앗 등록! (동시 미해결 원한 최대 4건 제한)
+      const prevGrudges = next.flags.bloodGrudges || [];
+      const activeGrudges = prevGrudges.filter((g) => !g.resolved);
+      const seedChance = kind === 'BLOOD_AVENGER' ? 0.35 : kind === 'REBEL_DISCIPLE' || kind === 'BETRAYER_DISCIPLE' ? 0.55 : 0.72;
+      let nextGrudges = prevGrudges;
+      if (activeGrudges.length < 4 && Math.random() < seedChance) {
+        const usedNames = new Set(prevGrudges.map((g) => g.avengerName));
+        const av = pickAvengerProfile(next.country, enemyName, enemyTitle, kind, usedNames);
+        const newGrudge: BloodGrudge = {
+          id: `gr_${next.turn}_${Math.random().toString(36).slice(2, 6)}`,
+          victimName: enemyName,
+          victimTitle: enemyTitle,
+          victimKind: kind,
+          killedYear: next.year,
+          killedTurn: next.turn,
+          sectId,
+          avengerRelation: av.relation,
+          avengerName: av.name,
+          resolved: false,
+        };
+        nextGrudges = [...prevGrudges, newGrudge];
+      }
+
+      next.flags = {
+        ...next.flags,
+        realDuelKills: (next.flags.realDuelKills || 0) + 1,
+        bloodGrudges: nextGrudges,
+      };
+
+      return addLog(
+        next,
+        `☠ 진검결투 끝에 ${josa(enemyName, '을를')} 베어 숨통을 끊었다. (명성 +${fameBonus}, 위엄 +${authBonus}, 살기 +${ruthlessBonus})`,
+        'DANGER'
+      );
+    }
+
+    case 'aftermath_spare': {
+      const enemyName = (event.meta?.enemyName as string) || '적';
+      const kind = ((event.meta?.enemyKind as BattleEnemyKind) || 'BREAKER');
+      const sectId = event.meta?.sectId as string | undefined;
+      const leaderId = event.meta?.leaderId as string | undefined;
+      const followerIds = (event.meta?.followerIds as string[]) || [];
+
+      const virtueBonus = kind === 'GRANDMASTER' ? 25 : kind === 'BLOOD_AVENGER' ? 22 : kind === 'BETRAYER_DISCIPLE' || kind === 'SECT_DUEL' || kind === 'SECT_RAID' ? 18 : 15;
+      const asceticBonus = kind === 'GRANDMASTER' ? 18 : kind === 'BLOOD_AVENGER' ? 16 : 8;
+
+      next.reputation = {
+        ...next.reputation,
+        virtue: next.reputation.virtue + virtueBonus,
+        ascetic: next.reputation.ascetic + asceticBonus,
+      };
+      if (kind === 'GRANDMASTER') {
+        next.stats = clampStatsByAge({ ...next.stats, ins: next.stats.ins + 3 }, next.age);
+      }
+
+      // 반란 제자 방면 → 파문·추방 처리 (목숨은 살림)
+      if (kind === 'REBEL_DISCIPLE' && leaderId) {
+        next = rebellionCrushed(next, leaderId, followerIds, false);
+        next.authority += 10;
+      }
+
+      // 타 문파 인물 방면 시 도량에 대한 경외로 관계 완화
+      if (sectId && (kind === 'SECT_DUEL' || kind === 'SECT_RAID' || kind === 'SECT_AID')) {
+        next = adjustRelation(next, sectId, 8, `진검결투에서 이기고도 ${josa(enemyName, '을를')} 살려 보내 도량을 보였다`);
+      }
+
+      return addLog(
+        next,
+        `진검을 거두고 쓰러진 ${josa(enemyName, '을를')} 살려 돌려보냈다. (인덕 +${virtueBonus}, 구도 +${asceticBonus}${kind === 'GRANDMASTER' ? ', 통찰 +3' : ''})`,
+        'GOOD'
+      );
+    }
+
+    case 'aftermath_mercy_subdue': {
+      const enemyName = (event.meta?.enemyName as string) || '제자';
+      const leaderId = event.meta?.leaderId as string | undefined;
+      const followerIds = (event.meta?.followerIds as string[]) || [];
+      next.reputation = {
+        ...next.reputation,
+        virtue: next.reputation.virtue + 20,
+        ascetic: next.reputation.ascetic + 10,
+      };
+      next.authority += 6;
+      next.disciples = next.disciples.map((d) => {
+        if (d.id === leaderId && !d.dead) {
+          return { ...d, role: 'STUDENT', loyalty: 36, plot: 0, watched: true, exposed: true };
+        }
+        if (followerIds.includes(d.id) && !d.dead) {
+          return { ...d, loyalty: Math.max(d.loyalty, 52) };
+        }
+        return d;
+      });
+      return addLog(
+        next,
+        `반란을 일으킨 ${josa(enemyName, '을를')} 베지 않고 칼을 부러뜨린 뒤 감시 아래 말단으로 묶어 속죄하게 했다. (인덕 +20, 구도 +10, 권위 +6)`,
+        'GOOD'
+      );
+    }
     case 'demon_swarm':
       next.fame = Math.max(0, next.fame - 12);
       next.authority = Math.max(0, next.authority - 8);
@@ -3121,7 +3331,29 @@ export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePaylo
     after = syncRivalSect(after, outcome.victory ? -4 : -2, outcome.victory ? '도장주끼리의 비무에서 패해 자존심이 상했다' : '도장주끼리의 비무에서 이겨 기세가 올랐다');
   }
   // 타 문파·반란과 얽힌 싸움의 뒷일 (관계 변화, 반란 무리의 처분 등)
-  return applySectBattleFollowup(battle, after, outcome.victory);
+  after = applySectBattleFollowup(battle, after, outcome.victory);
+
+  // ★ 진검전투 승리 시: 쓰러진 상대의 생사를 직접 결정하는 사후 처분 이벤트 연결! (라이벌 4막 임종은 전용 결말로 처리) ★
+  if (
+    battle &&
+    outcome.victory &&
+    battle.isRealDuel &&
+    !battle.spectatorMode &&
+    battle.id !== 'b_rival_4' &&
+    after.phase === 'MAIN' &&
+    !after.activeEvent
+  ) {
+    const discName =
+      outcome.fighterType === 'DISCIPLE' && outcome.discipleId
+        ? after.disciples.find((d) => d.id === outcome.discipleId)?.name
+        : undefined;
+    const concBadges = buildBattleConclusionNotice(state, after, battle, outcome).badges;
+    after = {
+      ...after,
+      activeEvent: buildRealDuelAftermathEvent(state, after, battle, outcome.fighterType, discName, concBadges),
+    };
+  }
+  return after;
 }
 
 function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload): GameState {
@@ -3350,7 +3582,11 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
       next = addLog(next, '은둔 노고수가 감탄하며 고개를 끄덕였다. 통찰과 기(QI)가 크게 깨어났다!', 'MAGIC');
     }
     if (battle.isRivalBattle) {
-      next.rival = { ...next.rival, lossesAgainstPlayer: next.rival.lossesAgainstPlayer + 1 };
+      next.rival = {
+        ...next.rival,
+        lossesAgainstPlayer: next.rival.lossesAgainstPlayer + 1,
+        ...(battle.id === 'b_rival_4' ? { alive: false } : {}),
+      };
     }
 
     if (battle.isRealDuel) {
@@ -3483,11 +3719,13 @@ export function buildBattleConclusionNotice(
     const d = next.disciples.find((x) => x.id === outcome.discipleId);
     const dName = d?.name || '문하생';
     if (outcome.victory) {
+      const detailed = buildDetailedVictoryConclusion(prev, battle, 'DISCIPLE', dName);
+      if (detailed) return { ...detailed, badges };
       return {
         title: `${battle.title} — 제자의 승전보`,
         speaker: dName,
         role: 'DISCIPLE',
-        body: `“사부님! 가르쳐 주신 초식으로 해냈습니다!”\n${battle.enemyName}이(가) 혀를 내두르며 물러갔다. 저잣거리에는 스승뿐 아니라 제자마저 무섭다는 소문이 번지기 시작했다.`,
+        body: `“사부님! 가르쳐 주신 초식으로 해냈습니다!”\n${josa(battle.enemyName, '이가')} 혀를 내두르며 물러갔다. 저잣거리에는 스승뿐 아니라 제자마저 무섭다는 소문이 번지기 시작했다.`,
         badges,
       };
     }
@@ -3628,12 +3866,16 @@ export function buildBattleConclusionNotice(
         badges,
       };
     }
+    if (battle.id === 'b_rival_4') {
+      const detailed = buildDetailedVictoryConclusion(prev, battle, 'HERO');
+      if (detailed) return { ...detailed, badges: [{ label: '★ 평생의 숙적과 작별', tone: 'MAGIC' }, ...badges] };
+    }
     if (battle.isRivalBattle) {
       return {
         title: `${battle.title} — 숙적과의 일합`,
         speaker: battle.enemyName,
         role: 'RIVAL',
-        body: `${battle.enemyName}이(가) 떨리는 손으로 칼을 집어넣으며 옅게 웃었다.\n${isElder ? '“……백발이 되어서도 자네 칼은 여전히 매섭군. 오늘 승부는 내가 졌네, 오랜 벗이여.”' : '“……네 검은 이제 내가 알던 그 칼이 아니군. 오늘 패배는 인정하지. 하지만 끝이 아니다.”'}`,
+        body: `${josa(battle.enemyName, '이가')} 떨리는 손으로 칼을 집어넣으며 옅게 웃었다.\n${isElder ? '“……백발이 되어서도 자네 칼은 여전히 매섭군. 오늘 승부는 내가 졌네, 오랜 벗이여.”' : '“……네 검은 이제 내가 알던 그 칼이 아니군. 오늘 패배는 인정하지. 하지만 끝이 아니다.”'}`,
         badges,
       };
     }
@@ -3659,12 +3901,17 @@ export function buildBattleConclusionNotice(
         badges: [{ label: '통찰 +10', tone: 'MAGIC' }, { label: '영력 +10', tone: 'MAGIC' }, ...badges],
       };
     }
+    // 반란/배신 옛 제자, 타 문파 교류·화해·습격·도전, 자객, 이국/특수 고수, 왈패/밀수단, 일반 도장깨기 전부 상황별 대사!
+    const detailedVictory = buildDetailedVictoryConclusion(prev, battle, 'HERO');
+    if (detailedVictory) {
+      return { ...detailedVictory, badges };
+    }
     if (battle.id.startsWith('spar_')) {
       return {
         title: '타류 친선 대련 — 일합의 수확',
         speaker: battle.enemyName,
         role: 'ENEMY',
-        body: `${battle.enemyName}이(가) 땀을 닦으며 공손히 포권했다.\n${prevWins >= 1 || isElder ? '“명불허전이십니다, 큰 사부님. 오늘 받아 낸 한 합은 평생의 가르침으로 삼겠습니다.”' : '“훌륭한 검이오. 오늘 겨룬 초식은 평생 잊지 못할 것이오.”'}\n실전을 통해 장착한 초식들의 감각이 한층 날카로워졌다.`,
+        body: `${josa(battle.enemyName, '이가')} 땀을 닦으며 공손히 포권했다.\n${prevWins >= 1 || isElder ? '“명불허전이십니다, 큰 사부님. 오늘 받아 낸 한 합은 평생의 가르침으로 삼겠습니다.”' : '“훌륭한 검이오. 오늘 겨룬 초식은 평생 잊지 못할 것이오.”'}\n실전을 통해 장착한 초식들의 감각이 한층 날카로워졌다.`,
         badges: [{ label: '초식 숙련도↑', tone: 'GOOD' }, ...badges],
       };
     }
@@ -3672,7 +3919,7 @@ export function buildBattleConclusionNotice(
       title: `${battle.title} — 완승`,
       speaker: battle.enemyName,
       role: 'ENEMY',
-      body: `${battle.enemyName}이(가) 무릎을 꿇고 꺾인 무기를 거두었다.\n${prevWins >= 1 || isElder ? `“……천하에 이름난 【${prev.sectName}】 대종사 앞에 감히 칼을 들었던 내 안목이 짧았소.”` : `“……【${prev.sectName}】의 이름은 헛된 소문이 아니었군. 오늘의 패배를 뼈에 새기겠소.”`}`,
+      body: `${josa(battle.enemyName, '이가')} 무릎을 꿇고 꺾인 무기를 거두었다.\n${prevWins >= 1 || isElder ? `“……천하에 이름난 【${prev.sectName}】 대종사 앞에 감히 칼을 들었던 내 안목이 짧았소.”` : `“……【${prev.sectName}】의 이름은 헛된 소문이 아니었군. 오늘의 패배를 뼈에 새기겠소.”`}`,
       badges,
     };
   } else {

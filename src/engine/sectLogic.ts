@@ -54,7 +54,7 @@ export function adjustRelation(state: GameState, sectId: string | undefined, del
   return brokeName ? addLog(next, `${sectTag(brokeName, '과와')}의 동맹이 깨졌다.`, 'WARN') : next;
 }
 
-function adjustPower(state: GameState, sectId: string | undefined, delta: number): GameState {
+export function adjustPower(state: GameState, sectId: string | undefined, delta: number): GameState {
   if (!sectId) return state;
   return { ...state, sects: getSects(state).map((s) => (s.id === sectId ? { ...s, power: clamp(s.power + delta, 10, 100) } : s)) };
 }
@@ -397,7 +397,7 @@ function countRebellion(state: GameState): GameState {
 }
 
 // 반란을 눌렀을 때: 우두머리는 떠나거나 죽고, 따르던 자들은 무릎을 꿇는다.
-function rebellionCrushed(state: GameState, leaderId: string, followerIds: string[], leaderDies: boolean): GameState {
+export function rebellionCrushed(state: GameState, leaderId: string, followerIds: string[], leaderDies: boolean): GameState {
   let next = state;
   const leader = next.disciples.find((d) => d.id === leaderId);
   if (leader) {
@@ -889,13 +889,15 @@ export function applySectBattleFollowup(battle: BattleConfig | null, after: Game
       const leaderName = battle.enemyName;
       next = countRebellion(next);
       if (victory) {
-        next = rebellionCrushed(next, a, followerIds, battle.isRealDuel);
+        // 진검 반란 승리는 직후 진검 처분 이벤트(duel_aftermath)에서 처형/추방/감시 강등을 플레이어가 직접 결정한다.
+        if (battle.isRealDuel) {
+          return addLog(next, `반란을 일으킨 ${josa(leaderName, '을를')} 진검 승부 끝에 제압했다. 이제 처분을 내려야 한다.`, 'WARN');
+        }
+        next = rebellionCrushed(next, a, followerIds, false);
         next.authority += 12;
         return addLog(
           next,
-          battle.isRealDuel
-            ? `반란을 일으킨 ${josa(leaderName, '을를')} 제 손으로 베었다. 따르던 자들이 칼을 버리고 무릎을 꿇는다. (권위 +12)`
-            : `${josa(leaderName, '을를')} 꺾어 대문 밖으로 내쳤다. 따르던 자들이 무릎을 꿇는다. (권위 +12)`,
+          `${josa(leaderName, '을를')} 꺾어 대문 밖으로 내쳤다. 따르던 자들이 무릎을 꿇는다. (권위 +12)`,
           'GOOD'
         );
       }
