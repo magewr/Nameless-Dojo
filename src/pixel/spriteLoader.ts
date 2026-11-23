@@ -417,12 +417,18 @@ export function getVfxGridSheet(src: string, cols = 4, rows = 2): VfxSheet | nul
           // 검정 배경을 매끄러운 광원 알파로 변환 (어두울수록 완전 투명!)
           const idata = cctx.getImageData(0, 0, cw, ch);
           const pd = idata.data;
+          // 밝기는 알파로 옮기고 색은 제 밝기로 되돌린다. (어두운 테두리 픽셀이 "어두운 색 + 낮은 알파"로 남으면
+          // 일반 합성에서 빛 둘레에 검은 띠가 생기고, 가산 합성에서는 이중으로 어두워진다)
           for (let i = 0; i < pd.length; i += 4) {
             const maxC = Math.max(pd[i], pd[i + 1], pd[i + 2]);
             if (maxC < 18) {
               pd[i + 3] = 0;
             } else {
-              pd[i + 3] = Math.min(255, Math.round((maxC - 18) * 1.45));
+              const k = 255 / maxC;
+              pd[i] = Math.min(255, Math.round(pd[i] * k));
+              pd[i + 1] = Math.min(255, Math.round(pd[i + 1] * k));
+              pd[i + 2] = Math.min(255, Math.round(pd[i + 2] * k));
+              pd[i + 3] = Math.min(255, Math.round((maxC - 18) * 1.08));
             }
           }
           cctx.putImageData(idata, 0, 0);

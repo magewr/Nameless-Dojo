@@ -1,3 +1,4 @@
+import { drawGlowSprite } from '../pixel/katanaVfxRenderer';
 import React, { useEffect, useRef, useState } from 'react';
 import { GameState, Skill } from '../types/game';
 import {
@@ -264,10 +265,9 @@ export const SkillPreviewCanvas: React.FC<{
               const mSheet = getVfxGridSheet(mSheetSrc, 4, 2);
               if (mSheet && mSheet.frames[animStep]) {
                 ctx.save();
-                ctx.globalCompositeOperation = 'lighter';
                 const mw = 158;
                 const mh = 138;
-                ctx.drawImage(mSheet.frames[animStep], Math.round(ex - mw / 2), Math.round(GY - mh + 8), mw, mh);
+                drawGlowSprite(ctx, mSheet.frames[animStep], Math.round(ex - mw / 2), Math.round(GY - mh + 8), mw, mh, 1);
                 ctx.restore();
               }
             }
@@ -306,22 +306,22 @@ export const SkillPreviewCanvas: React.FC<{
           // ★ 가산합성 32비트 픽셀아트 VFX (검궤·간파·충격파 스프라이트 시트!) ★
           const spVfxSheet = getVfxGridSheet(VFX_SHEETS.SLASH_PARRY, 4, 2);
           if (spVfxSheet && spVfxSheet.frames.length === 8 && !showDarkSlash) {
+            // 전투 화면과 같은 합성: 제 색으로 몸통을 그리고 옅은 빛 번짐만 얹는다
             ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
             if (showParrySpark) {
-              const s = 132;
+              const s = 104;
               const cx = Math.round((hx + ex) / 2);
-              const cy = Math.round(GY - 60);
-              ctx.drawImage(spVfxSheet.frames[tier >= 3 ? 5 : 4], Math.round(cx - s / 2), Math.round(cy - s / 2), s, s);
+              const cy = Math.round(GY - 66);
+              drawGlowSprite(ctx, spVfxSheet.frames[tier >= 3 ? 5 : 4], Math.round(cx - s / 2), Math.round(cy - s / 2), s, s, 1);
             }
             if (showVfx) {
-              const s = Math.round(92 + tier * 20);
+              const s = Math.round((92 + tier * 20) * (isUnarmedSkill ? 0.7 : 1));
               const idx = isUnarmedSkill ? 3 : isCounter || tier >= 4 ? 2 : tier >= 2 ? 1 : 0;
-              ctx.drawImage(spVfxSheet.frames[idx], Math.round(vfxX - s / 2), Math.round(GY - 58 - s / 2), s, s);
+              drawGlowSprite(ctx, spVfxSheet.frames[idx], Math.round(vfxX - s / 2), Math.round(GY - 58 - s / 2), s, s, 1);
             }
             if (showCombo2) {
-              const s = Math.round(86 + tier * 18);
-              ctx.drawImage(spVfxSheet.frames[isUnarmedSkill ? 3 : 2], Math.round(vfxX - s / 2), Math.round(GY - 52 - s / 2), s, s);
+              const s = Math.round((86 + tier * 18) * (isUnarmedSkill ? 0.7 : 1));
+              drawGlowSprite(ctx, spVfxSheet.frames[isUnarmedSkill ? 3 : 2], Math.round(vfxX - s / 2), Math.round(GY - 52 - s / 2), s, s, 1);
             }
             ctx.restore();
           }
