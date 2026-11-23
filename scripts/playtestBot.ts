@@ -20,6 +20,8 @@ import {
 } from '../src/data/booksAndSkills';
 import { MINOR_EVENTS } from '../src/data/minorEvents';
 import { generatePostMortemEnding } from '../src/data/worldAndEndings';
+import { withMilestones } from '../src/engine/milestones';
+import { VIGNETTES } from '../src/data/chronicleVignettes';
 import { BattleTactic, CountryId, DifficultyId, DojoFacilities, ScheduleActivityId, Skill } from '../src/types/game';
 import { getFacilityUpgradeCost } from '../src/data/balanceRules';
 
@@ -33,6 +35,34 @@ const memStorage: Record<string, string> = {};
   key: (i: number) => Object.keys(memStorage)[i] ?? null,
   get length() { return Object.keys(memStorage).length; },
 };
+
+// ---- 사후 연대기 검증용 누적 통계 ----
+const chronicleRoutes = new Map<string, number>();
+const vignetteCounts = new Map<string, number>();
+const chronicleSignatures = new Set<string>();
+let chronicleRuns = 0;
+let chronicleEntrySum = 0;
+let chronicleCauseWithYear = 0;
+let chronicleCauseTotal = 0;
+let milestoneSum = 0;
+function recordChronicleStats(ending: ReturnType<typeof generatePostMortemEnding>, st: { milestones?: unknown[] }) {
+  chronicleRuns++;
+  chronicleRoutes.set(ending.routeTag, (chronicleRoutes.get(ending.routeTag) || 0) + 1);
+  chronicleEntrySum += ending.chronicle.length;
+  milestoneSum += (st.milestones || []).length;
+  chronicleSignatures.add(ending.chronicle.map((e) => e.headline).join('|'));
+  ending.chronicle.forEach((e) => {
+    if (e.kind === 'VIGNETTE') vignetteCounts.set(e.headline, (vignetteCounts.get(e.headline) || 0) + 1);
+    if (e.cause) {
+      chronicleCauseTotal++;
+      if (e.cause.year !== undefined) chronicleCauseWithYear++;
+    }
+    const text = `${e.yearLabel}${e.headline}${e.body}${e.cause?.text || ''}`;
+    if (/[{}]|undefined|NaN/.test(text)) failures.push(`연대기 치환 누락: ${e.headline}`);
+  });
+  if (ending.chronicle.length < 3) failures.push(`연대기 장면 수 부족(${ending.chronicle.length}): ${ending.routeTag}`);
+  if (JSON.stringify(generatePostMortemEnding(st as never)) !== JSON.stringify(ending)) failures.push('같은 일생인데 연대기가 다르게 생성됨(비결정적)');
+}
 
 const failures: string[] = [];
 const warnings: string[] = [];
@@ -129,6 +159,7 @@ for (const strat of strategies) {
     const maxTurns = 340;
 
     while (st.phase !== 'ENDING' && st.turn < maxTurns) {
+      const turnStart = st;
       // 노년기엔 간파 수비로 전환해 노고수 AI 테스트
       if (st.age >= 50) st.battleTactic = 'COUNTER';
 
@@ -254,10 +285,12 @@ for (const strat of strategies) {
       if (st.skills.length > prevSkillCount && !st.activeCraft) craftsDone++;
 
       st = advanceSeason(st);
+      st = withMilestones(turnStart, st) || st; // 앱의 setState가 하는 것과 같은 생전 사건 자동 기록
     }
 
     const ending = generatePostMortemEnding(st);
     endingCounts.set(ending.endingTitle, (endingCounts.get(ending.endingTitle) || 0) + 1);
+    recordChronicleStats(ending, st);
     st.flags.minorEventIdsSeen.forEach((id) => minorEventSeenGlobal.add(id));
 
     agg.runs++;
@@ -350,6 +383,7 @@ for (const diff of diffs) {
     let safety = 0;
     while (st.phase !== 'ENDING' && safety < 320) {
       safety++;
+      const turnStart = st;
       if (st.activeEvent) {
         const opts = st.activeEvent.options.filter((o) => !o.disabled);
         let chosen = opts[0];
@@ -484,8 +518,10 @@ for (const diff of diffs) {
       }
       if (st.phase === 'ENDING') break;
       st = advanceSeason(st);
+      st = withMilestones(turnStart, st) || st; // 앱의 setState가 하는 것과 같은 생전 사건 자동 기록
     }
 
+    recordChronicleStats(generatePostMortemEnding(st), st);
     sumAge += st.age;
     if (st.age >= 55) survive55++;
     const cause = st.deathCause || '';
@@ -509,6 +545,14 @@ for (const diff of diffs) {
       `생존제자 ${(sumAliveDiscs / RUNS).toFixed(1)}명 · 사망제자 ${(sumDeadDiscs / RUNS).toFixed(1)}명 | 진검결투 평균 ${(sumRealDuels / RUNS).toFixed(1)}회`
   );
 }
+
+console.log(`\n[TEST 5] 사후 연대기 조립 검증 (${chronicleRuns}인생)`);
+console.log(`  • 조립 경로(세평·규모·계승) ${chronicleRoutes.size}종 · 장면 구성이 서로 다른 연대기 ${chronicleSignatures.size}종`);
+console.log(`  • 평균 장면 수 ${(chronicleEntrySum / chronicleRuns).toFixed(1)} · 일생당 생전 사건 기록 ${(milestoneSum / chronicleRuns).toFixed(1)}건 · 원인 표시 중 연도까지 붙은 비율 ${chronicleCauseTotal ? Math.round((chronicleCauseWithYear / chronicleCauseTotal) * 100) : 0}%`);
+console.log('  • 경로 상위:');
+Array.from(chronicleRoutes.entries()).sort((a, b) => b[1] - a[1]).slice(0, 12).forEach(([k, v]) => console.log(`     - ${k}: ${v}회`));
+console.log(`  • 등장한 개인 삽화 ${vignetteCounts.size} / ${VIGNETTES.length + 2}종 (각성 3형 포함):`);
+Array.from(vignetteCounts.entries()).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log(`     - ${k}: ${v}회`));
 
 console.log('\n==================================================================');
 console.log(`  분석 완료 | 치명 오류(FAIL): ${failures.length}건 | 밸런스 경고(WARN): ${warnings.length}건`);

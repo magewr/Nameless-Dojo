@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { GameState, LegacyRecord } from '../types/game';
-import { COUNTRIES, generatePostMortemEnding } from '../data/worldAndEndings';
+import { ChronicleCause, COUNTRIES, generatePostMortemEnding, SEASON_META } from '../data/worldAndEndings';
 import { BOOK_SKILL_TEMPLATES, MASTERY_NAMES } from '../data/booksAndSkills';
 import { getDojoMapSrc } from '../pixel/spriteLoader';
 import { appendLegacyRecord, clearGameState, hasUnlockedHellDifficulty, markGameCleared } from '../engine/storage';
 import { getDifficultyConfig } from '../data/difficulty';
 import { PixelPortrait } from './PixelPortrait';
-import { Award, ChevronLeft, ChevronRight, GitBranch, History, RotateCcw, ScrollText } from 'lucide-react';
+import { Award, ChevronLeft, ChevronRight, CornerDownRight, GitBranch, History, Milestone, RotateCcw, ScrollText } from 'lucide-react';
 import { sound } from '../engine/sound';
 
 interface Props {
@@ -22,13 +22,23 @@ interface EndingScene {
   showHeroPortrait?: boolean;
   text: string;
   subNote?: string;
+  cause?: string; // "1763년 가을(33세) — 빗속의 고아를 거두었다"
+}
+
+// 어느 생전의 선택이 이 장면을 낳았는지 한 줄로. 연도 기록이 없는 구버전 세이브는 "생전 —"으로만 표시한다.
+function formatCause(cause?: ChronicleCause): string | undefined {
+  if (!cause) return undefined;
+  if (cause.year === undefined) return `생전 — ${cause.text}`;
+  const season = cause.season ? ` ${SEASON_META[cause.season].label}` : '';
+  const age = cause.age !== undefined ? ` (${cause.age}세)` : '';
+  return `${cause.year}년${season}${age} — ${cause.text}`;
 }
 
 export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
   const [mode, setMode] = useState<'CINEMATIC' | 'ARCHIVE'>('CINEMATIC');
   const [sceneIdx, setSceneIdx] = useState(0);
   const [typedLen, setTypedLen] = useState(0);
-  const [tab, setTab] = useState<'CHRONICLE' | 'GENEALOGY'>('CHRONICLE');
+  const [tab, setTab] = useState<'CHRONICLE' | 'TIMELINE' | 'GENEALOGY'>('CHRONICLE');
   const [savedLegacy, setSavedLegacy] = useState(false);
 
   const report = useMemo(() => generatePostMortemEnding(state), [state]);
@@ -37,6 +47,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
     [state.skills]
   );
   const heirloom = state.weapons.find((w) => w.isHeirloom) || state.weapons.find((w) => w.id === state.equippedWeaponId);
+  const lifeMilestones = state.milestones || [];
 
   // 임종 → 장례식·계승 → 사후 19세기 → 20세기 → 2026년 현대 시네마틱 컷신 시퀀스!
   const scenes: EndingScene[] = useMemo(() => {
@@ -80,14 +91,15 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
       },
     ];
 
-    // 사후 200년 연대기 각 시대를 전용 32비트 픽셀 일러스트와 함께 1장씩 전개!
-    const eraBgs = ['/assets/px_end_era19.jpg', '/assets/px_title_bg.jpg', '/assets/px_end_modern.jpg'];
-    report.chronicle.forEach((entry, idx) => {
+    // 사후 200년 연대기: 장면마다 그 시대·그 사건의 전용 32비트 픽셀 일러스트와 함께 1장씩 전개!
+    report.chronicle.forEach((entry) => {
       list.push({
-        bg: eraBgs[idx] || '/assets/px_end_modern.jpg',
+        // 전용 일러스트가 없는 장면(계승 직후)은 도장 전경을 쓴다. 맥이 끊긴 일생이면 폐허가 된 도장.
+        bg: entry.image || getDojoMapSrc(state.country, entry.badge === '단절' ? 1 : state.facilities.yard),
         eraBadge: entry.badge ? `${entry.yearLabel} · ${entry.badge}` : entry.yearLabel,
         title: entry.headline,
         text: entry.body,
+        cause: formatCause(entry.cause),
       });
     });
 
@@ -113,6 +125,12 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
     }, 28);
     return () => clearInterval(timer);
   }, [mode, sceneIdx, curScene.text]);
+
+  // 다음 장면의 배경을 미리 받아 두어, 장면이 넘어갈 때 검은 화면이 보이지 않게 한다.
+  useEffect(() => {
+    const nextBg = scenes[sceneIdx + 1]?.bg;
+    if (mode === 'CINEMATIC' && nextBg) new Image().src = nextBg;
+  }, [mode, sceneIdx, scenes]);
 
   const handleAdvanceScene = () => {
     if (!isFinishedTyping) {
@@ -246,6 +264,12 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
                     {curScene.subNote}
                   </p>
                 )}
+                {isFinishedTyping && curScene.cause && (
+                  <p className="text-xs sm:text-sm text-[#fde68a]/90 border-t border-[#6b4728]/60 pt-2 animate-ink flex items-start gap-1.5">
+                    <CornerDownRight className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                    <span>{curScene.cause}</span>
+                  </p>
+                )}
               </div>
             </div>
 
@@ -275,6 +299,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-[#fde68a] pt-1">{report.endingTitle}</h1>
           <p className="text-xs text-[#d6cbb8]">{report.endingSubtitle} · {COUNTRIES[state.country].name}</p>
+          <p className="text-[11px] text-[#c7b394]">후대가 기억한 모습: {report.routeTag}</p>
           {(state.age >= 55 || (state.deathCause || '').includes('천수') || (state.flags.tournamentWins || 0) >= 1) && (
             <div className="inline-block px-2.5 py-1 text-[11px] font-bold bg-rose-950/80 border border-rose-400 text-rose-200">
               ☠ {hasUnlockedHellDifficulty() ? '【지옥 · 수라의 시대】 난이도 해금 완료!' : '일생 완주 달성! 【지옥 · 수라의 시대】 난이도 해금!'}
@@ -282,7 +307,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
           )}
         </div>
 
-        <div className="grid grid-cols-2 border-b-2 border-[#6b4728] bg-[#221710] text-xs sm:text-sm font-bold">
+        <div className="grid grid-cols-3 border-b-2 border-[#6b4728] bg-[#221710] text-xs sm:text-sm font-bold">
           <button
             onClick={() => { sound.playClick(); setTab('CHRONICLE'); }}
             className={`py-3 flex items-center justify-center gap-1.5 cursor-pointer ${
@@ -290,6 +315,14 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
             }`}
           >
             <History className="w-4 h-4" /> 사후 200년 연대기
+          </button>
+          <button
+            onClick={() => { sound.playClick(); setTab('TIMELINE'); }}
+            className={`py-3 flex items-center justify-center gap-1.5 cursor-pointer ${
+              tab === 'TIMELINE' ? 'bg-[#3d291a] text-[#fde68a] border-b-2 border-[#fde047]' : 'text-[#c7b394]'
+            }`}
+          >
+            <Milestone className="w-4 h-4" /> 1750→2026 연표
           </button>
           <button
             onClick={() => { sound.playClick(); setTab('GENEALOGY'); }}
@@ -311,7 +344,11 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
               <div className="relative pl-6 border-l-2 border-[#c9974c]/60 space-y-5">
                 {report.chronicle.map((ev, i) => (
                   <div key={i} className="relative">
-                    <div className="absolute -left-[31px] top-1 w-3.5 h-3.5 bg-[#c93b2b] border-2 border-[#fde68a]" />
+                    <div
+                      className={`absolute -left-[31px] top-1 w-3.5 h-3.5 border-2 border-[#fde68a] ${
+                        ev.kind === 'VIGNETTE' ? 'bg-[#2c4c6e] rotate-45' : 'bg-[#c93b2b]'
+                      }`}
+                    />
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-bold text-[#fde68a]">{ev.yearLabel}</span>
                       {ev.badge && (
@@ -321,11 +358,60 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
                       )}
                     </div>
                     <h3 className="text-base font-bold text-[#fff8e7] mt-1">{ev.headline}</h3>
-                    <p className="text-xs sm:text-sm leading-6 text-[#d6cbb8] mt-1">{ev.body}</p>
+                    {ev.image && (
+                      <img
+                        src={ev.image}
+                        alt={ev.headline}
+                        loading="lazy"
+                        className="pixel-canvas mt-2 w-full max-w-md aspect-video object-cover border border-[#6b4728]"
+                      />
+                    )}
+                    <p className="text-xs sm:text-sm leading-6 text-[#d6cbb8] mt-2 whitespace-pre-line">{ev.body}</p>
+                    {ev.cause && (
+                      <p className="text-[11px] sm:text-xs text-[#fde68a]/90 mt-1.5 flex items-start gap-1.5">
+                        <CornerDownRight className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        <span>{formatCause(ev.cause)}</span>
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
             </>
+          ) : tab === 'TIMELINE' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-[#c7b394] leading-6">
+                1750년 낡은 마당에서 시작해 오늘에 이르기까지, 살아서 한 일과 죽은 뒤에 남은 일을 한 줄로 이었다.
+              </p>
+              <div className="relative pl-6 border-l-2 border-[#c9974c]/60 space-y-2.5">
+                <div className="relative text-xs sm:text-sm">
+                  <div className="absolute -left-[30px] top-1 w-3 h-3 bg-[#fde68a]" />
+                  <span className="font-bold text-[#fde68a]">1750년</span>
+                  <span className="text-[#d6cbb8]"> · {state.startAge}세 — 이름 없는 도장을 물려받았다</span>
+                </div>
+                {lifeMilestones.length === 0 && (
+                  <div className="text-xs text-[#8c6239] italic">이 일생은 생전 사건 기록이 생기기 전에 시작되어, 살아서 한 일의 연표가 남아 있지 않다.</div>
+                )}
+                {lifeMilestones.map((m, i) => (
+                  <div key={i} className="relative text-xs sm:text-sm">
+                    <div className={`absolute -left-[30px] top-1 w-3 h-3 ${m.key === 'DEATH' ? 'bg-[#c93b2b]' : 'bg-[#fde68a]'}`} />
+                    <span className="font-bold text-[#fde68a]">{m.year}년 {SEASON_META[m.season].label}</span>
+                    <span className="text-[#d6cbb8]"> · {m.age}세 — {m.text}</span>
+                  </div>
+                ))}
+                <div className="text-[11px] text-[#c7b394] pt-1">— 이하 사후 —</div>
+                {report.chronicle.map((ev, i) => (
+                  <div key={`c${i}`} className="relative text-xs sm:text-sm">
+                    <div
+                      className={`absolute -left-[30px] top-1 w-3 h-3 border border-[#fde68a] ${
+                        ev.kind === 'VIGNETTE' ? 'bg-[#2c4c6e] rotate-45' : 'bg-[#4a2b1a]'
+                      }`}
+                    />
+                    <span className="font-bold text-[#f5e9ce]">{ev.yearLabel}</span>
+                    <span className="text-[#d6cbb8]"> — {ev.headline}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : (
             <div className="space-y-5">
               <div className="space-y-2.5">

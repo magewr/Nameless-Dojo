@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BattleTactic,
   CountryId,
@@ -49,9 +49,14 @@ import { DojoAndWeaponsModal } from './components/DojoAndWeaponsModal';
 import { DisciplesAndFamilyModal } from './components/DisciplesAndFamilyModal';
 import { EventModal, EventResultModal, EventResultNotice, MerchantModal, TraitSelectModal } from './components/MerchantAndEventModals';
 import { EndingReportView } from './components/EndingReportView';
+import { withMilestones } from './engine/milestones';
 
 export function App() {
-  const [state, setState] = useState<GameState | null>(null);
+  const [state, setStateRaw] = useState<GameState | null>(null);
+  // 모든 상태 변경이 이 함수를 거친다. 바뀐 내용을 이전 상태와 비교해 생전 주요 사건(milestones)을 자동 기록한다.
+  const setState = useCallback((update: React.SetStateAction<GameState | null>) => {
+    setStateRaw((prev) => withMilestones(prev, typeof update === 'function' ? update(prev) : update));
+  }, []);
   const [creating, setCreating] = useState(false);
 
   const [trainModalTab, setTrainModalTab] = useState<'TRAIN' | 'CRAFT' | 'BOOKS' | null>(null);
@@ -232,6 +237,7 @@ export function App() {
       if (!loaded.flags.storyMemory) loaded.flags.storyMemory = {};
       if (loaded.activeBuild === undefined) loaded.activeBuild = null;
       if (!loaded.graduatedDisciples) loaded.graduatedDisciples = [];
+      if (!loaded.milestones) loaded.milestones = [];
       setState(loaded);
       setCreating(false);
     }

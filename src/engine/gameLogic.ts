@@ -180,6 +180,7 @@ export function createNewGame(
         type: 'NORMAL',
       },
     ],
+    milestones: [],
     activeEvent: null,
     pendingBattle: null,
     merchantOffer: null,

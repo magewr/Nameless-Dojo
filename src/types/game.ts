@@ -379,6 +379,15 @@ export interface LogEntry {
   type: 'NORMAL' | 'GOOD' | 'WARN' | 'DANGER' | 'MAGIC' | 'RUMOR';
 }
 
+// 생전의 굵직한 사건 기록. 사후 연대기에서 "어느 선택이 이 결과를 낳았는가"를 연도와 함께 보여 주는 데 쓴다.
+export interface LifeMilestone {
+  key: string; // 예: 'MEMORY_ORPHAN_ACCEPTED', 'HEIR_NAMED', 'TOURNAMENT_WIN'
+  year: number;
+  season: Season;
+  age: number;
+  text: string; // "빗속의 고아를 거두었다"처럼 과거형 한 문장
+}
+
 export interface MerchantOffer {
   books: Book[];
   weapons: Weapon[];
@@ -486,6 +495,7 @@ export interface GameState {
     sparringWins: number;
   };
   logs: LogEntry[];
+  milestones?: LifeMilestone[]; // 구버전 세이브에는 없을 수 있다 (빈 목록으로 취급)
   activeEvent: ActiveEvent | null;
   pendingBattle: BattleConfig | null;
   merchantOffer: MerchantOffer | null;
