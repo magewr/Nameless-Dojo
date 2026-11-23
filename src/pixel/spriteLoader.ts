@@ -37,7 +37,8 @@ export function loadRawImage(src: string): HTMLImageElement | null {
 }
 
 function isGreenKey(r: number, g: number, b: number): boolean {
-  return g > 110 && g - r > 32 && g - b > 32;
+  // 네온 크로마키 배경만 정확히 제거 (조선 원로 여성 쑥색/옥색 한복 저고리 등 저채도 녹색 의상 보호!)
+  return g > 125 && g - r > 55 && g - b > 55;
 }
 
 function chromaClear(ctx: CanvasRenderingContext2D, W: number, H: number): ImageData {
@@ -78,19 +79,19 @@ function chromaClear(ctx: CanvasRenderingContext2D, W: number, H: number): Image
     if (y < H - 1) tryPush(x, y + 1);
   }
 
-  // 내부 닫힌 녹색 틈(다리/팔 사이) 제거 + 1px 녹색 경계 Despill
+  // 내부 닫힌 네온 녹색 틈(다리/팔 사이) 제거 + 강한 녹색 경계 Halo Despill (의상 녹색 보존!)
   for (let i = 0; i < W * H; i++) {
     const p = i * 4;
     if (d[p + 3] === 0) continue;
     const r = d[p];
     const g = d[p + 1];
     const b = d[p + 2];
-    if (g > 175 && r < 95 && b < 95) {
+    if (g > 180 && r < 95 && b < 95 && g - r > 70 && g - b > 70) {
       d[p + 3] = 0;
       continue;
     }
-    if (g > Math.max(r, b) + 16) {
-      d[p + 1] = Math.round((r + b) * 0.5);
+    if (g > Math.max(r, b) + 32) {
+      d[p + 1] = Math.round((r + b) * 0.5 + 10);
     }
   }
 
@@ -295,7 +296,100 @@ function extractSegments(hasPixel: Uint8Array, len: number, maxGap = 6, minSize 
   return segs;
 }
 
-// 2D 그리드(cols × rows) 정밀 슬라이서 (4×1 보행 시트 & 4×2 8프레임 전투 시트 모두 지원!)
+interface ComponentBox {
+  label: number;
+  count: number;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  cx: number;
+  cy: number;
+}
+
+function bboxDistance(a: ComponentBox, b: ComponentBox): number {
+  const dx = Math.max(0, a.minX - b.maxX, b.minX - a.maxX);
+  const dy = Math.max(0, a.minY - b.maxY, b.minY - a.maxY);
+  return Math.hypot(dx, dy);
+}
+
+// 2D 연결 컴포넌트 라벨 마스크로 해당 프레임에 속한 픽셀만 정밀 추출 (인접 프레임 침범·칼끝 잘림 0%!)
+function extractMaskedSprite(
+  srcData: Uint8ClampedArray,
+  W: number,
+  ry0: number,
+  labels: Int32Array,
+  allowedLabels: Set<number>,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+  withGhost = false
+): ProcessedSprite {
+  const cw = Math.max(1, maxX - minX + 1);
+  const ch = Math.max(1, maxY - minY + 1);
+  const trimmed = document.createElement('canvas');
+  trimmed.width = cw;
+  trimmed.height = ch;
+  const tctx = trimmed.getContext('2d')!;
+  tctx.imageSmoothingEnabled = false;
+  const outImg = tctx.createImageData(cw, ch);
+  const od = outImg.data;
+
+  const lowerStartY = minY + Math.floor(ch * 0.45);
+  let sumX = 0;
+  let countLower = 0;
+
+  for (let ly = minY; ly <= maxY; ly++) {
+    const gy = ry0 + ly;
+    const dy = ly - minY;
+    for (let x = minX; x <= maxX; x++) {
+      const lb = labels[ly * W + x];
+      if (lb === 0 || !allowedLabels.has(lb)) continue;
+      const sp = (gy * W + x) * 4;
+      const dp = (dy * cw + (x - minX)) * 4;
+      od[dp] = srcData[sp];
+      od[dp + 1] = srcData[sp + 1];
+      od[dp + 2] = srcData[sp + 2];
+      od[dp + 3] = srcData[sp + 3];
+      if (ly >= lowerStartY && srcData[sp + 3] > 25) {
+        sumX += x - minX;
+        countLower++;
+      }
+    }
+  }
+  tctx.putImageData(outImg, 0, 0);
+
+  const anchorX = countLower > 0 ? sumX / countLower : cw / 2;
+
+  const flash = document.createElement('canvas');
+  flash.width = cw;
+  flash.height = ch;
+  const fctx = flash.getContext('2d')!;
+  fctx.imageSmoothingEnabled = false;
+  fctx.drawImage(trimmed, 0, 0);
+  fctx.globalCompositeOperation = 'source-in';
+  fctx.fillStyle = '#ffffff';
+  fctx.fillRect(0, 0, cw, ch);
+
+  let ghostCanvas: HTMLCanvasElement | undefined;
+  if (withGhost) {
+    const gc = document.createElement('canvas');
+    gc.width = cw;
+    gc.height = ch;
+    const gctx = gc.getContext('2d')!;
+    gctx.imageSmoothingEnabled = false;
+    gctx.drawImage(trimmed, 0, 0);
+    gctx.globalCompositeOperation = 'source-in';
+    gctx.fillStyle = '#93c5fd';
+    gctx.fillRect(0, 0, cw, ch);
+    ghostCanvas = gc;
+  }
+
+  return { canvas: trimmed, flashCanvas: flash, ghostCanvas, width: cw, height: ch, anchorX };
+}
+
+// 2D 그리드(cols × rows) 정밀 슬라이서 (2D 연결 컴포넌트 기반 — X좌표 겹침/근접 포즈에서도 잘림·침범 0%!)
 export function getGridSpriteSheet(src: string, cols = 4, rows = 2): SpriteSheet | null {
   const cacheKey = `${src}|${cols}x${rows}`;
   const cached = sheetCache.get(cacheKey);
@@ -330,7 +424,7 @@ export function getGridSpriteSheet(src: string, cols = 4, rows = 2): SpriteSheet
             }
           }
         }
-        const detectedRows = extractSegments(rowHas, H, 6, 40);
+        const detectedRows = extractSegments(rowHas, H, 4, 40);
         if (detectedRows.length === rows) {
           rowBounds = detectedRows;
         } else {
@@ -341,27 +435,144 @@ export function getGridSpriteSheet(src: string, cols = 4, rows = 2): SpriteSheet
         }
       }
 
-      // 2단계: 각 행 안에서 열(Col) 분리
+      // 2단계: 각 행 내부에서 2D 8-방향 연결 컴포넌트 분리 → cols개 본체 식별 + 부속 이펙트(장풍/혈흔/스파크) 귀속!
       const frames: ProcessedSprite[] = [];
       for (const [ry0, ry1] of rowBounds) {
-        const colHas = new Uint8Array(W);
-        for (let x = 0; x < W; x++) {
-          for (let y = ry0; y <= ry1; y++) {
-            if (d[(y * W + x) * 4 + 3] > 25) {
-              colHas[x] = 1;
-              break;
+        const rH = ry1 - ry0 + 1;
+        const labels = new Int32Array(W * rH);
+        const queue = new Int32Array(W * rH);
+        const comps: ComponentBox[] = [];
+        let curLabel = 0;
+
+        for (let ly = 0; ly < rH; ly++) {
+          const gy = ry0 + ly;
+          for (let x = 0; x < W; x++) {
+            const li = ly * W + x;
+            if (d[(gy * W + x) * 4 + 3] <= 25 || labels[li] !== 0) continue;
+            curLabel++;
+            let head = 0;
+            let tail = 0;
+            labels[li] = curLabel;
+            queue[tail++] = li;
+            let count = 0;
+            let minX = x;
+            let maxX = x;
+            let minY = ly;
+            let maxY = ly;
+            let sumX = 0;
+
+            while (head < tail) {
+              const idx = queue[head++];
+              count++;
+              const cx = idx % W;
+              const cy = (idx - cx) / W;
+              sumX += cx;
+              if (cx < minX) minX = cx;
+              if (cx > maxX) maxX = cx;
+              if (cy < minY) minY = cy;
+              if (cy > maxY) maxY = cy;
+              for (let dy = -1; dy <= 1; dy++) {
+                const ny = cy + dy;
+                if (ny < 0 || ny >= rH) continue;
+                const ngy = ry0 + ny;
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+                  const nx = cx + dx;
+                  if (nx < 0 || nx >= W) continue;
+                  const ni = ny * W + nx;
+                  if (labels[ni] === 0 && d[(ngy * W + nx) * 4 + 3] > 25) {
+                    labels[ni] = curLabel;
+                    queue[tail++] = ni;
+                  }
+                }
+              }
             }
+            comps.push({
+              label: curLabel,
+              count,
+              minX,
+              maxX,
+              minY,
+              maxY,
+              cx: sumX / count,
+              cy: (minY + maxY) * 0.5,
+            });
           }
         }
-        const detectedCols = extractSegments(colHas, W, 6, 24);
-        if (detectedCols.length === cols) {
-          for (const [cx0, cx1] of detectedCols) {
-            frames.push(trimRect(off, cx0, ry0, cx1, ry1, rows > 1));
+
+        const sortedBySize = [...comps].sort((a, b) => b.count - a.count);
+        const largest = sortedBySize[0]?.count || 0;
+        const seeds = sortedBySize.filter((c) => c.count >= largest * 0.25).slice(0, cols);
+
+        if (seeds.length === cols) {
+          seeds.sort((a, b) => a.cx - b.cx);
+          const groups = seeds.map((s) => ({
+            seed: s,
+            labels: new Set<number>([s.label]),
+            minX: s.minX,
+            maxX: s.maxX,
+            minY: s.minY,
+            maxY: s.maxY,
+          }));
+          const seedSet = new Set(seeds.map((s) => s.label));
+
+          for (const comp of comps) {
+            if (seedSet.has(comp.label)) continue;
+            let bestIdx = -1;
+            let bestDist = Infinity;
+            for (let i = 0; i < groups.length; i++) {
+              const dist = bboxDistance(comp, groups[i].seed);
+              if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = i;
+              }
+            }
+            if (bestIdx >= 0) {
+              const g = groups[bestIdx];
+              const isSignificant = comp.count >= g.seed.count * 0.004 && bestDist <= 48;
+              const isVeryClose = comp.count >= 12 && bestDist <= 18;
+              if (isSignificant || isVeryClose) {
+                g.labels.add(comp.label);
+                if (comp.minX < g.minX) g.minX = comp.minX;
+                if (comp.maxX > g.maxX) g.maxX = comp.maxX;
+                if (comp.minY < g.minY) g.minY = comp.minY;
+                if (comp.maxY > g.maxY) g.maxY = comp.maxY;
+              }
+            }
+          }
+
+          for (const g of groups) {
+            frames.push(
+              extractMaskedSprite(d, W, ry0, labels, g.labels, g.minX, g.minY, g.maxX, g.maxY, rows > 1)
+            );
           }
         } else {
-          const cw = Math.floor(W / cols);
+          // 희귀 fallback: 픽셀 밀도 최소 밸리(valley) 위치로 동적 분할
+          const colDensity = new Int32Array(W);
+          for (let x = 0; x < W; x++) {
+            let cnt = 0;
+            for (let y = ry0; y <= ry1; y++) {
+              if (d[(y * W + x) * 4 + 3] > 25) cnt++;
+            }
+            colDensity[x] = cnt;
+          }
+          const xCuts = [0];
+          for (let c = 1; c < cols; c++) {
+            const idealX = Math.round((c * W) / cols);
+            let bestX = idealX;
+            let bestScore = Infinity;
+            for (let x = Math.max(4, idealX - 64); x <= Math.min(W - 5, idealX + 64); x++) {
+              const score = colDensity[x] * 10 + Math.abs(x - idealX) * 0.25;
+              if (score < bestScore) {
+                bestScore = score;
+                bestX = x;
+              }
+            }
+            xCuts.push(bestX);
+          }
+          xCuts.push(W);
           for (let c = 0; c < cols; c++) {
-            frames.push(trimRect(off, c * cw, ry0, Math.min(W - 1, (c + 1) * cw - 1), ry1, rows > 1));
+            frames.push(trimRect(off, xCuts[c], ry0, Math.max(xCuts[c], xCuts[c + 1] - 1), ry1, rows > 1));
           }
         }
       }
@@ -381,7 +592,7 @@ export function getSpriteSheet(src: string, expectedFrames = 4): SpriteSheet | n
   return getGridSpriteSheet(src, expectedFrames, 1);
 }
 
-// 순수 검정(#000000) 배경 4×2 전투 VFX 그리드 로더 (Luma-to-Alpha + Additive Blend용!)
+// 순수 검정(#000000) 배경 4×2 전투 VFX 그리드 로더 (동적 최소밝기 밸리 분할 + 동일배율 중앙정렬 + Additive Blend용!)
 export function getVfxGridSheet(src: string, cols = 4, rows = 2): VfxSheet | null {
   const cached = vfxCache.get(src);
   if (cached) return cached;
@@ -399,41 +610,104 @@ export function getVfxGridSheet(src: string, cols = 4, rows = 2): VfxSheet | nul
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, 0, 0, W, H);
 
-      const cw = Math.floor(W / cols);
-      const ch = Math.floor(H / rows);
-      const frames: HTMLCanvasElement[] = [];
+      const srcData = ctx.getImageData(0, 0, W, H).data;
+      const lumaAt = (x: number, y: number) => {
+        const p = (y * W + x) * 4;
+        return Math.max(srcData[p], srcData[p + 1], srcData[p + 2]);
+      };
+
+      // 1단계: 행 경계선(yCuts)을 이상적 경계 근처(±48px)의 가장 어두운 수평선으로 자동 탐색
+      const yCuts: number[] = [0];
+      for (let r = 1; r < rows; r++) {
+        const idealY = Math.round((r * H) / rows);
+        let bestY = idealY;
+        let bestScore = Infinity;
+        for (let y = Math.max(4, idealY - 48); y <= Math.min(H - 5, idealY + 48); y++) {
+          let energy = 0;
+          for (let x = 0; x < W; x++) {
+            const v = lumaAt(x, y);
+            if (v >= 18) energy += (v - 17) * (v - 17);
+          }
+          const score = energy + Math.abs(y - idealY) * 0.5;
+          if (score < bestScore) {
+            bestScore = score;
+            bestY = y;
+          }
+        }
+        yCuts.push(bestY);
+      }
+      yCuts.push(H);
+
+      // 2단계: 각 행 내부에서 열 경계선(xCuts)을 이상적 경계 근처(±64px)의 가장 어두운 수직선으로 자동 탐색
+      const cellRects: Array<{ x0: number; y0: number; w: number; h: number }> = [];
+      let maxCellW = Math.floor(W / cols);
+      let maxCellH = Math.floor(H / rows);
 
       for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const cell = document.createElement('canvas');
-          cell.width = cw;
-          cell.height = ch;
-          const cctx = cell.getContext('2d', { willReadFrequently: true })!;
-          cctx.imageSmoothingEnabled = false;
-          // 미세하게 안쪽 2px 크롭하여 인접 셀 번짐 0% 보장
-          const pad = 2;
-          cctx.drawImage(off, c * cw + pad, r * ch + pad, cw - pad * 2, ch - pad * 2, 0, 0, cw, ch);
-
-          // 검정 배경을 매끄러운 광원 알파로 변환 (어두울수록 완전 투명!)
-          const idata = cctx.getImageData(0, 0, cw, ch);
-          const pd = idata.data;
-          // 밝기는 알파로 옮기고 색은 제 밝기로 되돌린다. (어두운 테두리 픽셀이 "어두운 색 + 낮은 알파"로 남으면
-          // 일반 합성에서 빛 둘레에 검은 띠가 생기고, 가산 합성에서는 이중으로 어두워진다)
-          for (let i = 0; i < pd.length; i += 4) {
-            const maxC = Math.max(pd[i], pd[i + 1], pd[i + 2]);
-            if (maxC < 18) {
-              pd[i + 3] = 0;
-            } else {
-              const k = 255 / maxC;
-              pd[i] = Math.min(255, Math.round(pd[i] * k));
-              pd[i + 1] = Math.min(255, Math.round(pd[i + 1] * k));
-              pd[i + 2] = Math.min(255, Math.round(pd[i + 2] * k));
-              pd[i + 3] = Math.min(255, Math.round((maxC - 18) * 1.08));
+        const y0 = yCuts[r];
+        const y1 = yCuts[r + 1] - 1;
+        const xCuts: number[] = [0];
+        for (let c = 1; c < cols; c++) {
+          const idealX = Math.round((c * W) / cols);
+          let bestX = idealX;
+          let bestScore = Infinity;
+          for (let x = Math.max(4, idealX - 64); x <= Math.min(W - 5, idealX + 64); x++) {
+            let energy = 0;
+            for (let y = y0; y <= y1; y++) {
+              const v = lumaAt(x, y);
+              if (v >= 18) energy += (v - 17) * (v - 17);
+            }
+            const score = energy + Math.abs(x - idealX) * 0.5;
+            if (score < bestScore) {
+              bestScore = score;
+              bestX = x;
             }
           }
-          cctx.putImageData(idata, 0, 0);
-          frames.push(cell);
+          xCuts.push(bestX);
         }
+        xCuts.push(W);
+
+        for (let c = 0; c < cols; c++) {
+          const x0 = xCuts[c];
+          const rw = Math.max(1, xCuts[c + 1] - x0);
+          const rh = Math.max(1, y1 - y0 + 1);
+          if (rw > maxCellW) maxCellW = rw;
+          if (rh > maxCellH) maxCellH = rh;
+          cellRects.push({ x0, y0, w: rw, h: rh });
+        }
+      }
+
+      // 3단계: 시트 전체 통일 크기(maxCellW × maxCellH) 캔버스 중앙에 1:1 비율 그대로 복사 → 잘림·왜곡·침범 0%!
+      const frames: HTMLCanvasElement[] = [];
+      for (const rect of cellRects) {
+        const cell = document.createElement('canvas');
+        cell.width = maxCellW;
+        cell.height = maxCellH;
+        const cctx = cell.getContext('2d', { willReadFrequently: true })!;
+        cctx.imageSmoothingEnabled = false;
+        const dx = Math.floor((maxCellW - rect.w) / 2);
+        const dy = Math.floor((maxCellH - rect.h) / 2);
+        cctx.drawImage(off, rect.x0, rect.y0, rect.w, rect.h, dx, dy, rect.w, rect.h);
+
+        // 검정 배경을 매끄러운 광원 알파로 변환 (어두울수록 완전 투명!)
+        const idata = cctx.getImageData(0, 0, maxCellW, maxCellH);
+        const pd = idata.data;
+        // 밝기는 알파로 옮기고 색은 제 밝기로 되돌린다. (어두운 테두리 픽셀이 "어두운 색 + 낮은 알파"로 남으면
+        // 일반 합성에서 빛 둘레에 검은 띠가 생기고, 가산 합성에서는 이중으로 어두워진다)
+        for (let i = 0; i < pd.length; i += 4) {
+          const maxC = Math.max(pd[i], pd[i + 1], pd[i + 2]);
+          if (maxC < 18) {
+            pd[i + 3] = 0;
+          } else {
+            const k = 255 / maxC;
+            pd[i] = Math.min(255, Math.round(pd[i] * k));
+            pd[i + 1] = Math.min(255, Math.round(pd[i + 1] * k));
+            pd[i + 2] = Math.min(255, Math.round(pd[i + 2] * k));
+            pd[i + 3] = Math.min(255, Math.round((maxC - 18) * 1.08));
+          }
+        }
+        cctx.putImageData(idata, 0, 0);
+        frames.push(cell);
       }
 
       vfxCache.set(src, { frames });
@@ -607,7 +881,6 @@ export function preloadAllGameArt() {
     '/assets/grid_vfx_ice_8f.jpg',
     '/assets/grid_vfx_shadow_8f.jpg',
     '/assets/grid_vfx_qi_8f.jpg',
-    '/assets/grid_vfx_katana_strokes_4x2.jpg',
   ].forEach((s) => getVfxGridSheet(s, 4, 2));
   getKatanaStrokeAssets();
 }

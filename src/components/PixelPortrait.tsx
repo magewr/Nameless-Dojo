@@ -153,6 +153,63 @@ function resolveGridCell(
   return { src: npcSrc, col: 2, row: 0 };
 }
 
+// 시트별 실측 격자선(1152×864) 기준 순수 내부 초상화 영역 (나무 테두리·옆 칸 침범 0px, 1:1 비율 유지!)
+const PORTRAIT_SHEET_GRID: Record<string, { w: number; h: number; xLines: number[]; yLines: number[]; pad: number }> = {
+  '/assets/grid_portraits_heroes_4x3.jpg': {
+    w: 1152,
+    h: 864,
+    xLines: [5, 295, 584, 872, 1146],
+    yLines: [3, 295, 579, 863],
+    pad: 10,
+  },
+  '/assets/grid_portraits_ages_4x3.jpg': {
+    w: 1152,
+    h: 864,
+    xLines: [14, 301, 566, 871, 1138],
+    yLines: [9, 296, 577, 852],
+    pad: 12,
+  },
+  '/assets/grid_portraits_npcs_4x3.jpg': {
+    w: 1152,
+    h: 864,
+    xLines: [2, 290, 579, 861, 1150],
+    yLines: [4, 280, 563, 859],
+    pad: 8,
+  },
+};
+
+function computePortraitCropStyle(src: string, col: number, row: number): React.CSSProperties {
+  const meta = PORTRAIT_SHEET_GRID[src];
+  if (!meta) {
+    return {
+      backgroundImage: `url(${src})`,
+      backgroundSize: '412% 312%',
+      backgroundPosition: `${(col / 3) * 100}% ${(row / 2) * 100}%`,
+      backgroundRepeat: 'no-repeat',
+    };
+  }
+  const x0 = meta.xLines[col] + meta.pad;
+  const x1 = meta.xLines[col + 1] - meta.pad;
+  const y0 = meta.yLines[row] + meta.pad;
+  const y1 = meta.yLines[row + 1] - meta.pad;
+  const cw = Math.max(1, x1 - x0);
+  const ch = Math.max(1, y1 - y0);
+  const side = Math.min(cw, ch);
+  const sx0 = (x0 + x1) * 0.5 - side * 0.5;
+  const sy0 = (y0 + y1) * 0.5 - side * 0.5;
+  const sizeX = (meta.w / side) * 100;
+  const sizeY = (meta.h / side) * 100;
+  const posX = (sx0 / (meta.w - side)) * 100;
+  const posY = (sy0 / (meta.h - side)) * 100;
+
+  return {
+    backgroundImage: `url(${src})`,
+    backgroundSize: `${sizeX.toFixed(2)}% ${sizeY.toFixed(2)}%`,
+    backgroundPosition: `${posX.toFixed(2)}% ${posY.toFixed(2)}%`,
+    backgroundRepeat: 'no-repeat',
+  };
+}
+
 export const PixelPortrait: React.FC<Props> = ({
   role,
   country = 'KOREA',
@@ -164,9 +221,7 @@ export const PixelPortrait: React.FC<Props> = ({
 }) => {
   const cell = resolveGridCell(role, country, age, gender, variantHint);
   const isOldHero = role === 'HERO' && age >= 55;
-
-  const posX = (cell.col / 3) * 100;
-  const posY = (cell.row / 2) * 100;
+  const cropStyle = computePortraitCropStyle(cell.src, cell.col, cell.row);
 
   return (
     <div
@@ -181,12 +236,7 @@ export const PixelPortrait: React.FC<Props> = ({
         role="img"
         aria-label={role}
         className="w-full h-full pixel-canvas"
-        style={{
-          backgroundImage: `url(${cell.src})`,
-          backgroundSize: '412% 312%',
-          backgroundPosition: `${posX}% ${posY}%`,
-          backgroundRepeat: 'no-repeat',
-        }}
+        style={cropStyle}
       />
       {isOldHero && (
         <div className="absolute bottom-0 inset-x-0 bg-black/75 text-[9px] text-center text-[#fde68a] py-0.5 leading-none">
