@@ -2,7 +2,40 @@ import { getKatanaStrokeAssets, getVfxGridSheet } from './spriteLoader';
 
 export const SEQ_8F = [0, 1, 2, 3, 4, 5, 6, 7];
 
-// ★ 60fps 감각의 프레임 크로스페이드 + 탄력적 Ease-Out 스케일 보간 32비트 VFX 스프라이트 렌더러! ★
+// 빛 스프라이트 한 장을 그린다.
+// 가산 합성(lighter)만 쓰면 여러 이펙트가 겹칠 때 화면이 하얗게 타 버리므로,
+// 제 색을 살리는 일반 합성으로 몸통을 그리고 그 위에 옅은 가산 합성으로 빛 번짐만 얹는다.
+export function drawGlowSprite(
+  ctx: CanvasRenderingContext2D,
+  cell: HTMLCanvasElement,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+  alpha: number,
+  glow = 0.3
+) {
+  const a = Math.max(0, Math.min(1, alpha));
+  if (a <= 0.02) return;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = a * 0.9;
+  ctx.drawImage(cell, dx, dy, dw, dh);
+  if (glow > 0) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = a * glow;
+    ctx.drawImage(cell, dx, dy, dw, dh);
+  }
+}
+
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+// 8프레임 픽셀아트 VFX 스프라이트 렌더러.
+// - 나타날 때는 두 프레임 안에 켜지고(타격 순간에 이미 보여야 한다), 끝의 30%에서 부드럽게 꺼진다.
+// - 프레임마다 모양이 크게 다르므로 대부분의 시간은 한 장만 또렷하게 보여 주고,
+//   다음 프레임으로 넘어가기 직전 40% 구간에서만 섞는다. (내내 섞으면 두 모양이 겹쳐 유령처럼 보인다)
 export function drawSmoothVfxSprite(
   ctx: CanvasRenderingContext2D,
   opts: {
@@ -14,6 +47,7 @@ export function drawSmoothVfxSprite(
     scale: number;
     flipX?: number;
     rotation?: number;
+    glow?: number;
   }
 ) {
   const sheet = getVfxGridSheet(opts.sheetSrc, 4, 2);
@@ -21,45 +55,33 @@ export function drawSmoothVfxSprite(
   const prog = Math.max(0, Math.min(0.999, opts.progress));
   const seq = opts.frameSeq.length > 0 ? opts.frameSeq : [0];
 
-  // 빠른 점등(8%) + 자연스러운 끝 페이드아웃(마지막 22%)
-  const envAlpha = prog < 0.08 ? prog / 0.08 : prog > 0.78 ? (1 - prog) / 0.22 : 1.0;
+  // 한 장짜리 섬광·폭발은 번쩍하고 곧 스러져야 한다. 오래 버티면 싸우는 두 사람을 가리는 원판이 된다.
+  const fadeFrom = seq.length === 1 ? 0.3 : 0.7;
+  const envIn = Math.min(1, prog / 0.05);
+  const envOut = prog > fadeFrom ? 1 - Math.pow((prog - fadeFrom) / (1 - fadeFrom), 1.5) : 1;
+  const envAlpha = envIn * envOut;
 
-  // 탄력적 Ease-Out 펀치 스케일 (단일 프레임이면 0.72→1.12→1.04, 8프레임 애니면 미세 확장 0.94→1.06)
-  const easeOut = 1 - Math.pow(1 - Math.min(1, prog * 2.5), 3);
-  const punch = seq.length === 1 ? 0.72 + easeOut * 0.36 : 0.94 + prog * 0.12;
+  // 단일 프레임은 빠르게 튀어나왔다가(0.78→1.06) 살짝 가라앉고, 8프레임 애니는 조금씩 퍼진다.
+  const easeOut = 1 - Math.pow(1 - Math.min(1, prog * 4), 3);
+  const punch = seq.length === 1 ? 0.78 + easeOut * 0.28 - prog * 0.04 : 0.95 + prog * 0.1;
   const sizeW = Math.round(212 * opts.scale * punch);
   const sizeH = Math.round(184 * opts.scale * punch);
 
   ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
   ctx.translate(Math.round(opts.x), Math.round(opts.y));
   if (opts.rotation) ctx.rotate(opts.rotation);
   if (opts.flipX && opts.flipX !== 1) ctx.scale(opts.flipX, 1);
 
   if (seq.length === 1) {
-    const cell = sheet.frames[seq[0] % 8];
-    ctx.globalAlpha = Math.max(0, Math.min(1, envAlpha));
-    ctx.drawImage(cell, -sizeW / 2, -sizeH / 2, sizeW, sizeH);
+    drawGlowSprite(ctx, sheet.frames[seq[0] % 8], -sizeW / 2, -sizeH / 2, sizeW, sizeH, envAlpha, opts.glow);
   } else {
-    // 인접한 두 프레임(idxA, idxB)을 부드럽게 크로스페이드 보간! → 뚝뚝 끊김 0%!
-    const fPos = prog * (seq.length - 1);
-    const idxA = Math.floor(fPos);
+    const fPos = prog * seq.length;
+    const idxA = Math.min(seq.length - 1, Math.floor(fPos));
     const idxB = Math.min(seq.length - 1, idxA + 1);
-    const frac = fPos - idxA;
-
-    const cellA = sheet.frames[seq[idxA] % 8];
-    const cellB = sheet.frames[seq[idxB] % 8];
-
-    const alphaA = envAlpha * (1 - frac * 0.65);
-    const alphaB = envAlpha * Math.min(1, frac * 1.15);
-
-    if (alphaA > 0.02) {
-      ctx.globalAlpha = Math.max(0, Math.min(1, alphaA));
-      ctx.drawImage(cellA, -sizeW / 2, -sizeH / 2, sizeW, sizeH);
-    }
-    if (idxB !== idxA && alphaB > 0.02) {
-      ctx.globalAlpha = Math.max(0, Math.min(1, alphaB));
-      ctx.drawImage(cellB, -sizeW / 2, -sizeH / 2, sizeW, sizeH);
+    const blend = idxB !== idxA ? smooth(0.6, 1, fPos - idxA) : 0;
+    drawGlowSprite(ctx, sheet.frames[seq[idxA] % 8], -sizeW / 2, -sizeH / 2, sizeW, sizeH, envAlpha * (1 - blend), opts.glow);
+    if (blend > 0.02) {
+      drawGlowSprite(ctx, sheet.frames[seq[idxB] % 8], -sizeW / 2, -sizeH / 2, sizeW, sizeH, envAlpha * blend, opts.glow);
     }
   }
   ctx.restore();
@@ -169,7 +191,9 @@ export function createKoOneStroke(
   };
 }
 
-// 단획 픽셀 스프라이트를 좌→우로 초고속 와이프(mask clip)하며 그리기!
+// 단획 스프라이트를 붓으로 긋듯 뻗어 나가게 그린다.
+// 예전에는 왼쪽부터 잘라 보이는 방식이라 뻗는 동안 칼끝이 수직으로 뚝 잘려 보였다.
+// 지금은 그림 전체를 진행률만큼의 길이에 맞춰 늘여 그리므로, 뻗는 내내 양끝이 뾰족하게 살아 있다.
 function drawWipedSprite(
   ctx: CanvasRenderingContext2D,
   sprite: HTMLCanvasElement,
@@ -178,21 +202,23 @@ function drawWipedSprite(
   angle: number,
   drawW: number,
   drawH: number,
-  wipeRatio: number, // 0..1 (좌→우로 그어지는 진행률)
+  wipeRatio: number, // 0..1 (시작점에서 끝점까지 뻗은 정도)
   alpha: number,
   flipX = 1
 ) {
   if (wipeRatio <= 0.01 || alpha <= 0.01) return;
-  const clampedWipe = Math.min(1, wipeRatio);
-  const srcW = Math.max(1, Math.round(sprite.width * clampedWipe));
-  const destW = Math.max(1, drawW * clampedWipe);
+  // 처음에 빠르게 뻗고 끝에서 살짝 감속한다 (칼끝이 화면을 가로지르는 속도감)
+  const eased = 1 - Math.pow(1 - Math.min(1, wipeRatio), 2.2);
+  const destW = Math.max(1, drawW * eased);
+  // 뻗는 중에는 조금 가늘게 시작해 다 뻗었을 때 제 굵기가 된다
+  const destH = drawH * (0.55 + 0.45 * eased);
 
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
   ctx.scale(flipX, 1);
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-  ctx.drawImage(sprite, 0, 0, srcW, sprite.height, -drawW / 2, -drawH / 2, destW, drawH);
+  ctx.drawImage(sprite, 0, 0, sprite.width, sprite.height, -drawW / 2, -destH / 2, destW, destH);
   ctx.restore();
 }
 
@@ -318,7 +344,8 @@ export function renderKoOneStroke(
   // Phase 1 (0 ~ 85ms): 강렬한 흑백/진홍 임팩트 프리즈 프레임!
   if (el < 85) {
     const flash = 1 - el / 85;
-    ctx.fillStyle = el < 38 ? `rgba(255, 250, 235, ${0.52 * flash + 0.18})` : `rgba(18, 4, 6, 0.72)`;
+    // 한 프레임 번쩍한 뒤 곧바로 어둠으로 가라앉는다 (화면 전체가 오래 하얗게 뜨지 않게)
+    ctx.fillStyle = el < 34 ? `rgba(255, 250, 235, ${(0.46 * flash).toFixed(3)})` : `rgba(18, 4, 6, ${(0.72 * Math.min(1, (el - 34) / 40)).toFixed(3)})`;
     ctx.fillRect(0, 0, canvasW, canvasH);
   } else {
     // Phase 2 & 3 배경 수묵 비네팅
@@ -362,4 +389,179 @@ export function renderKoOneStroke(
   }
 
   ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// 패링 불꽃 (칼과 칼이 맞부딪힌 자리에서 주황빛 쇠불꽃이 크게 튄다)
+// - 번쩍이는 심지 + 십자 섬광 + 가로로 길게 긋는 빛줄기 → 퍼지는 고리 → 사방으로 튀었다 떨어지는 불꽃 줄기
+// - 합(chain)이 깊어질수록 섬광·고리·불꽃 수가 함께 커진다
+// - 나이(age)는 부르는 쪽이 흘려 준다. 부딪힌 순간에는 거의 멈춰 두었다가(챙!) 느리게 풀어 주면
+//   불꽃이 터져 나오는 모습이 슬로모션으로 보인다. 위치는 나이에서 식으로 계산한다.
+// ---------------------------------------------------------------------------
+export interface DeflectSpark {
+  age: number; // ms. 부르는 쪽에서 매 프레임 더한다
+  x: number;
+  y: number;
+  chain: number;
+  tilt: number; // 맞부딪힌 칼날의 기울기
+  durationMs: number;
+  streaks: Array<{ ang: number; spd: number; life: number; width: number; delay: number }>;
+  embers: Array<{ ang: number; spd: number; life: number }>;
+}
+
+// 부딪힌 순간의 정지와 그 뒤의 슬로모션 길이 (합이 깊어질수록 조금씩 짧아져 박자가 빨라진다)
+export function getClashPause(chain: number): { freezeMs: number; slowMs: number } {
+  const k = Math.max(1, Math.min(6, chain));
+  return { freezeMs: 92 - k * 4, slowMs: 190 - k * 14 };
+}
+
+// 정지·슬로모션 동안 불꽃의 시간이 흐르는 속도
+export const DEFLECT_RATE_FREEZE = 0.2;
+export const DEFLECT_RATE_SLOW = 0.5;
+
+export function createDeflectSpark(x: number, y: number, facing: 1 | -1, chain: number): DeflectSpark {
+  const k = Math.max(1, Math.min(6, chain));
+  const streaks: DeflectSpark['streaks'] = [];
+  const count = 22 + k * 8;
+  for (let i = 0; i < count; i++) {
+    // 열에 여섯은 좌우 위쪽으로 부채꼴을 그리며 튀고, 나머지는 사방으로 흩어진다
+    const fan = Math.random() < 0.62;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const ang = fan ? -Math.PI / 2 + side * (0.3 + Math.random() * 1.05) : Math.random() * Math.PI * 2;
+    streaks.push({
+      ang,
+      // 빠른 것과 느린 것이 고르게 섞여야 둥근 테처럼 보이지 않고 흩날리는 불꽃으로 보인다
+      spd: 300 + Math.pow(Math.random(), 1.5) * 1050 + k * 45,
+      life: 190 + Math.random() * 280 + k * 16,
+      width: 2.4 + Math.random() * 2 + k * 0.14,
+      delay: Math.random() * 40,
+    });
+  }
+  const embers: DeflectSpark['embers'] = [];
+  for (let i = 0; i < 6 + k * 2; i++) {
+    embers.push({ ang: -Math.PI / 2 + (Math.random() - 0.5) * 2.8, spd: 90 + Math.random() * 190, life: 340 + Math.random() * 300 });
+  }
+  return {
+    age: 0,
+    x,
+    y,
+    chain,
+    tilt: -0.62 * facing + (Math.random() - 0.5) * 0.4,
+    durationMs: 760,
+    streaks,
+    embers,
+  };
+}
+
+// 그렸으면 true, 수명이 끝났으면 false
+export function renderDeflectSpark(ctx: CanvasRenderingContext2D, s: DeflectSpark): boolean {
+  const t = s.age;
+  if (t > s.durationMs) return false;
+  const k = Math.max(1, Math.min(6, s.chain));
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'butt';
+
+  // 1) 심지: 흰빛에서 주황으로 번지는 둥근 빛
+  if (t < 150) {
+    const a = 1 - Math.pow(t / 150, 1.3);
+    const r = (34 + k * 8) * (0.7 + 0.3 * Math.min(1, t / 30));
+    const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r);
+    grad.addColorStop(0, `rgba(255, 255, 255, ${a})`);
+    grad.addColorStop(0.3, `rgba(255, 226, 150, ${a * 0.9})`);
+    grad.addColorStop(0.62, `rgba(255, 150, 50, ${a * 0.45})`);
+    grad.addColorStop(1, 'rgba(255, 110, 20, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 2) 섬광: 맞부딪힌 칼날을 따라 길게, 그에 직각으로 짧게, 그리고 가로로 가늘게 긋는 빛줄기
+  if (t < 140) {
+    const grow = 0.6 + 0.4 * Math.min(1, t / 28);
+    const fade = 1 - Math.pow(t / 140, 1.2);
+    const drawBlade = (angle: number, len: number, half: number, warm = true) => {
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(angle);
+      if (warm) {
+        ctx.fillStyle = `rgba(255, 165, 55, ${0.8 * fade})`;
+        ctx.beginPath();
+        ctx.moveTo(-len, 0);
+        ctx.lineTo(0, -half * 1.8);
+        ctx.lineTo(len, 0);
+        ctx.lineTo(0, half * 1.8);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = `rgba(255, 252, 235, ${fade})`;
+      ctx.beginPath();
+      ctx.moveTo(-len * 0.86, 0);
+      ctx.lineTo(0, -half);
+      ctx.lineTo(len * 0.86, 0);
+      ctx.lineTo(0, half);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    };
+    const len = (78 + k * 18) * grow;
+    const half = Math.max(0.7, (6 + k * 0.9) * fade);
+    drawBlade(s.tilt, len, half);
+    drawBlade(s.tilt + Math.PI / 2, len * 0.55, half * 0.8);
+    // 쇠가 부딪히는 순간의 가로 빛줄기 ("챙!")
+    drawBlade(0, (120 + k * 34) * grow, Math.max(0.5, (1.6 + k * 0.2) * fade), false);
+  }
+
+  // 3) 고리: 가늘게 퍼지며 사라진다. 3합부터는 한 겹이 더 따라 나온다.
+  const drawRing = (rt: number, span: number, maxR: number, alpha: number) => {
+    if (rt < 0 || rt > span) return;
+    const p = rt / span;
+    const ease = 1 - Math.pow(1 - p, 2.4);
+    ctx.strokeStyle = `rgba(255, 205, 130, ${alpha * (1 - p)})`;
+    ctx.lineWidth = Math.max(0.7, 3.4 * (1 - p));
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 10 + maxR * ease, 0, Math.PI * 2);
+    ctx.stroke();
+  };
+  drawRing(t, 210, 58 + k * 14, 0.85);
+  if (k >= 3) drawRing(t - 50, 230, (58 + k * 14) * 1.45, 0.5);
+
+  // 4) 불꽃 줄기: 빠르게 튀어나와 공기에 걸려 느려지며 아래로 떨어진다. 흰빛 → 주황 → 붉은 주황으로 식는다.
+  const DRAG = 6.5;
+  const GRAVITY = 620;
+  const posAt = (ang: number, spd: number, ts: number) => {
+    const d = (spd * (1 - Math.exp(-DRAG * ts))) / DRAG;
+    return { x: s.x + Math.cos(ang) * d, y: s.y + Math.sin(ang) * d + 0.5 * GRAVITY * ts * ts };
+  };
+  s.streaks.forEach((sp) => {
+    const lt = t - sp.delay;
+    if (lt <= 0 || lt >= sp.life) return;
+    const p = lt / sp.life;
+    const head = posAt(sp.ang, sp.spd, lt / 1000);
+    const tail = posAt(sp.ang, sp.spd, Math.max(0, lt - 46) / 1000);
+    ctx.globalAlpha = 1 - p * p;
+    ctx.strokeStyle = p < 0.3 ? '#fff6d6' : p < 0.68 ? '#ffb347' : '#ef6a1a';
+    ctx.lineWidth = Math.max(0.9, sp.width * (1 - p * 0.55));
+    ctx.beginPath();
+    ctx.moveTo(Math.round(tail.x), Math.round(tail.y));
+    ctx.lineTo(Math.round(head.x), Math.round(head.y));
+    ctx.stroke();
+  });
+
+  // 5) 잔불: 불꽃이 지나간 뒤 잠깐 남아 떨어지는 작은 점
+  s.embers.forEach((em) => {
+    const lt = t - 40;
+    if (lt <= 0 || lt >= em.life) return;
+    const p = lt / em.life;
+    const pos = posAt(em.ang, em.spd, lt / 1000);
+    ctx.globalAlpha = 0.95 * (1 - p);
+    ctx.fillStyle = p < 0.5 ? '#ffd27a' : '#f08a2a';
+    const size = p < 0.4 ? 3 : 2;
+    ctx.fillRect(Math.round(pos.x), Math.round(pos.y), size, size);
+  });
+
+  ctx.restore();
+  return true;
 }

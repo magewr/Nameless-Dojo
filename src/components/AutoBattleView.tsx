@@ -15,8 +15,15 @@ import {
 } from '../pixel/spriteLoader';
 import {
   createDarkFlurry,
+  createDeflectSpark,
+  DEFLECT_RATE_FREEZE,
+  DEFLECT_RATE_SLOW,
+  DeflectSpark,
+  getClashPause,
+  renderDeflectSpark,
   createKoOneStroke,
   DarkFlurryState,
+  drawGlowSprite,
   drawSmoothVfxSprite,
   KoOneStrokeState,
   renderDarkFlurry,
@@ -224,6 +231,9 @@ interface FighterRuntime {
   hurtFlashUntil: number;
   hurtPoseUntil: number;
   lungeOffset: number;
+  recoilOffset: number; // 피격 넉백을 한 프레임에 순간이동시키지 않고 미끄러지듯 보여 주기 위한 화면상 보정값
+  clashPoseUntil: number; // 공격이 막힌 쪽이 칼을 내지른 자세 그대로 버티는 시간 (맞은 자세가 아니다)
+  clashFrame: number;
   counterBuffUntil: number;
   pendingCounter?: { skill: Skill; formNum: number; triggerAt: number; chain: number };
   shoutText: string;
@@ -240,6 +250,12 @@ interface FighterRuntime {
 const CANVAS_W = 900;
 const CANVAS_H = 420;
 const GROUND_Y = 368;
+// 피격 섬광: 처음 한두 프레임만 새하얗게, 그 뒤로는 본래 그림 위에 옅게 얹어 빠르게 걷힌다.
+const HIT_FLASH_MS = 170;
+const HIT_FLASH_WHITE_MS = 50;
+// 글자 팝업 자리: 머리 위는 초식 외침 말풍선의 자리이므로 피해 숫자는 몸 옆에, 상태 문구는 말풍선 위에 띄운다.
+const FLOAT_STATUS_Y = 124;
+const FLOAT_DAMAGE_Y = 236;
 
 // 적 유파명 자동 생성 (외침용)
 function getEnemySectName(battle: BattleConfig, country: GameState['country']): string {
@@ -391,12 +407,16 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
   const darkFlurryRef = useRef<DarkFlurryState | null>(null);
   const koStrokeRef = useRef<KoOneStrokeState | null>(null);
   const wavesRef = useRef<ProjectileWave[]>([]);
+  const deflectsRef = useRef<DeflectSpark[]>([]);
 
   const metaRef = useRef({
     hitstopUntil: 0,
     timeSlowUntil: 0,
     timeSlowColor: '#fde047',
     parryFlashUntil: 0,
+    parryFlashStart: 0,
+    parryChain: 0,
+    clashSlowUntil: 0,
     inkFlashUntil: 0,
     shakeUntil: 0,
     shakePower: 8,
@@ -520,6 +540,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       hurtFlashUntil: 0,
       hurtPoseUntil: 0,
       lungeOffset: 0,
+      recoilOffset: 0,
+      clashPoseUntil: 0,
+      clashFrame: 3,
       counterBuffUntil: 0,
       shoutText: '',
       shoutSub: '',
@@ -554,6 +577,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       hurtFlashUntil: 0,
       hurtPoseUntil: 0,
       lungeOffset: 0,
+      recoilOffset: 0,
+      clashPoseUntil: 0,
+      clashFrame: 3,
       counterBuffUntil: 0,
       shoutText: '',
       shoutSub: '',
@@ -567,6 +593,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
     floatsRef.current = [];
     ghostsRef.current = [];
     vfxSpritesRef.current = [];
+    deflectsRef.current = [];
     slashLinesRef.current = [];
     bladeArcsRef.current = [];
     flaresRef.current = [];
@@ -583,6 +610,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       timeSlowUntil: 0,
       timeSlowColor: '#fde047',
       parryFlashUntil: 0,
+      parryFlashStart: 0,
+      parryChain: 0,
+      clashSlowUntil: 0,
       inkFlashUntil: 0,
       shakeUntil: 0,
       shakePower: 8,
@@ -662,9 +692,28 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
 
     const panAt = (x: number) => Math.max(-0.78, Math.min(0.78, (x - CANVAS_W / 2) / (CANVAS_W / 2)));
 
-    const spawnParticles = (x: number, y: number, color: string, count: number, spread = 6.5, gravity = 0.16) => {
+    // 글자 팝업을 띄운다. 이미 떠 있는 글자와 겹치면 위로 한 줄씩 비켜 쌓는다.
+    const pushFloat = (fl: FloatingText) => {
+      const x = Math.max(70, Math.min(CANVAS_W - 70, fl.x));
+      let y = fl.y;
+      for (let guard = 0; guard < 5; guard++) {
+        const clash = floatsRef.current.some((o) => Math.abs(o.x - x) < 96 && Math.abs(o.y - y) < 17);
+        if (!clash) break;
+        y -= 19;
+      }
+      floatsRef.current.push({ ...fl, x, y });
+    };
+
+    // dir(±1)을 주면 그 방향 반원으로 쏠려 튄다 (맞은 방향으로 파편이 날아가야 타격이 읽힌다)
+    const biasedAngle = (dir: number) => {
+      if (!dir) return Math.random() * Math.PI * 2;
+      const base = dir > 0 ? 0 : Math.PI;
+      return Math.random() < 0.8 ? base + (Math.random() - 0.5) * 2.2 : Math.random() * Math.PI * 2;
+    };
+
+    const spawnParticles = (x: number, y: number, color: string, count: number, spread = 6.5, gravity = 0.16, dir = 0) => {
       for (let i = 0; i < count; i++) {
-        const ang = Math.random() * Math.PI * 2;
+        const ang = biasedAngle(dir);
         const spd = 1.8 + Math.random() * spread;
         particlesRef.current.push({
           x,
@@ -682,9 +731,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
     };
 
     // 방향성 쇠불꽃 스파크 스트릭 (패링·강타 시 속도 방향으로 길게 뻗는 빛줄기!)
-    const spawnSparks = (x: number, y: number, color: string, count: number, speed = 11) => {
+    const spawnSparks = (x: number, y: number, color: string, count: number, speed = 11, dir = 0) => {
       for (let i = 0; i < count; i++) {
-        const ang = Math.random() * Math.PI * 2;
+        const ang = biasedAngle(dir);
         const spd = speed * (0.45 + Math.random() * 0.85);
         particlesRef.current.push({
           x,
@@ -776,8 +825,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         y,
         sheetSrc: isHuge ? VFX_SHEETS.QI_FINISHER : VFX_SHEETS.SLASH_PARRY,
         frameSeq: isHuge ? [5, 6, 7] : [4],
-        scale: Math.max(0.85, size / 72),
-        duration: isHuge ? 0.46 : 0.3,
+        scale: Math.max(0.7, size / 84),
+        duration: isHuge ? 0.42 : 0.24,
       });
     };
 
@@ -885,14 +934,20 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       counterChain = 0
     ) => {
       const facing = def.x >= atk.x ? 1 : -1;
+      // 원소 폭발이 따로 터지는 기술인가 (그렇다면 그것이 주인공이므로 다른 장식은 줄인다)
+      const hasElementBurst =
+        sk.element === 'FIRE' || sk.element === 'LIGHTNING' || sk.element === 'ICE' || sk.element === 'SHADOW' || !!sk.isForbidden || (sk.element === 'QI' && prof.tier >= 2);
       const chainBonus = isCounterRiposte && counterChain > 1 ? 1 + Math.min(4, counterChain - 1) * 0.14 : 1.0;
       const dmg = Math.max(6, Math.round(computeDamage(atk, def, sk, atkIsP, now, isCounterRiposte) * hitScale * chainBonus));
 
       def.hp = Math.max(0, def.hp - dmg);
-      def.hurtFlashUntil = now + 150;
+      def.hurtFlashUntil = now + HIT_FLASH_MS;
       def.hurtPoseUntil = now + (isCounterRiposte ? 380 : 260);
       const knock = (isCounterRiposte ? 34 : prof.isArmorBreak ? 28 : 16) * (isSecondHit ? 0.7 : 1);
+      const beforeKnockX = def.x;
       def.x = Math.max(92, Math.min(CANVAS_W - 92, def.x + facing * knock));
+      // 판정상 위치는 바로 옮기되, 화면에서는 히트스톱이 풀린 뒤 밀려나도록 보정값을 남긴다.
+      def.recoilOffset += beforeKnockX - def.x;
 
       const postureDmg = Math.round((sk.postureDamage || 16) * (prof.isArmorBreak ? 1.8 : 1.0));
       def.posture = Math.max(0, def.posture - postureDmg);
@@ -901,10 +956,10 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         def.posture = def.maxPosture;
         sound.playGuardBreak(panAt(def.x));
         // 체세 붕괴 산산조각 방패 파편 + 지면 균열 암석 폭발 스프라이트!
-        spawnVfxAnim({ x: def.x, y: 248, sheetSrc: VFX_SHEETS.SLASH_PARRY, frameSeq: [6], scale: 1.35, duration: 0.44 });
-        spawnGroundCrack(def.x, 1.25, '#fb923c');
-        spawnSparks(def.x, 250, '#fb923c', 16, 12);
-        floatsRef.current.push({ x: def.x, y: 145, text: '체세 붕괴!', color: '#fb923c', life: 0.9, maxLife: 0.9, scale: 1.25 });
+        spawnVfxAnim({ x: def.x, y: 248, sheetSrc: VFX_SHEETS.SLASH_PARRY, frameSeq: [6], scale: 1.2, duration: 0.4 });
+        if (!hasElementBurst) spawnGroundCrack(def.x, 1.15, '#fb923c');
+        spawnSparks(def.x, 250, '#fb923c', 14, 12);
+        pushFloat({ x: def.x, y: FLOAT_STATUS_Y, text: '체세 붕괴!', color: '#fb923c', life: 0.9, maxLife: 0.9, scale: 1.25 });
       }
 
       // 히트스톱 & 쉐이크 & 먹물 일섬 암전!
@@ -922,6 +977,11 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         sk.form === 'STRIKE' ||
         sk.form === 'GRAPPLE';
 
+      // 겹쳐 그리는 장수를 줄인다: [주 타격 한 장] + [접점의 짧은 섬광] + (원소 기술이면 원소 폭발)만 기본으로 두고,
+      // 진홍 일섬·큰 별빛·지면 균열은 반격·처형·체세 파괴 같은 특별한 순간에만 얹는다.
+      const heavyHit = isCounterRiposte || prof.isExecute;
+      const strikeScale = hasElementBurst ? 0.82 : 1.0;
+
       if (attackerIsUnarmed) {
         spawnVfxAnim({
           x: def.x - facing * 12,
@@ -929,71 +989,75 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           vx: facing * 22,
           sheetSrc: VFX_SHEETS.SLASH_PARRY,
           frameSeq: [3],
-          scale: prof.scale * 1.15,
-          flipX: facing,
-          duration: 0.28,
-        });
-      } else if (isCounterRiposte || prof.isExecute || prof.tier >= 4) {
-        // 필살/반격/고티어: 8프레임 초승달 대참격 + 진홍 일섬 교차!
-        spawnVfxAnim({
-          x: def.x - facing * 12,
-          y: 252 + (isSecondHit ? 10 : 0),
-          vx: facing * 30,
-          sheetSrc: VFX_SHEETS.SLASH_8F,
-          frameSeq: SEQ_8F,
-          scale: prof.scale * 1.18,
-          flipX: facing,
-          rotation: isSecondHit ? 0.35 * facing : 0,
-          duration: 0.28,
-        });
-        spawnVfxAnim({
-          x: def.x,
-          y: 252,
-          sheetSrc: VFX_SHEETS.SLASH_PARRY,
-          frameSeq: [2],
-          scale: prof.scale * 1.12,
+          // 주먹·발이 닿은 자리의 충격파. 몸 전체를 덮지 않도록 가슴께 크기로 둔다.
+          scale: prof.scale * 0.62 * strikeScale,
           flipX: facing,
           duration: 0.24,
         });
       } else {
-        // 일반/중급 도검 참격: 8프레임 초승달 대참격 초고속 30fps!
+        // 도검 참격: 8프레임 초승달 (2타는 각도를 틀어 다른 궤적으로)
         spawnVfxAnim({
           x: def.x - facing * 14,
           y: 254 + (isSecondHit ? 10 : 0),
           vx: facing * 28,
           sheetSrc: VFX_SHEETS.SLASH_8F,
           frameSeq: SEQ_8F,
-          scale: prof.scale * 1.08 * (isSecondHit ? 0.92 : 1.0),
+          scale: prof.scale * (heavyHit ? 1.16 : 1.06) * (isSecondHit ? 0.92 : 1.0) * strikeScale,
           flipX: facing,
           rotation: isSecondHit ? 0.38 * facing : 0,
-          duration: 0.26,
+          duration: 0.27,
         });
+        if (heavyHit) {
+          // 반격·처형: 진홍 일섬을 한 박자 얹는다
+          spawnVfxAnim({
+            x: def.x,
+            y: 252,
+            sheetSrc: VFX_SHEETS.SLASH_PARRY,
+            frameSeq: [2],
+            scale: prof.scale * 1.05,
+            flipX: facing,
+            duration: 0.22,
+          });
+        }
       }
 
-      // 고레벨/카운터/처형 시 추가 별빛 섬광 & 지면 균열 스프라이트!
-      if (prof.tier >= 3 || isCounterRiposte || prof.isExecute) {
-        spawnCrossFlare(def.x, 252, isCounterRiposte ? 102 : prof.tier >= 4 ? 86 : 64, isCounterRiposte ? '#fde047' : prof.color);
+      if (heavyHit) {
+        spawnCrossFlare(def.x, 250, isCounterRiposte ? 84 : 72, isCounterRiposte ? '#fde047' : prof.color);
+      } else if (!hasElementBurst) {
+        // 칼끝이 닿은 자리의 짧은 섬광 (숙련도가 높을수록 조금 크게)
+        spawnVfxAnim({
+          x: def.x - facing * 10,
+          y: 248 + (isSecondHit ? 12 : 0),
+          sheetSrc: VFX_SHEETS.LEGACY,
+          frameSeq: [7],
+          scale: 0.28 + prof.tier * 0.07,
+          duration: 0.13,
+        });
+      }
+      if (prof.tier >= 3 || heavyHit) {
         spawnInkSplatter(def.x, 256, facing, isCounterRiposte ? 16 : 10, prof.color);
       }
 
+      if ((prof.isArmorBreak || isCounterRiposte) && !hasElementBurst) {
+        spawnGroundCrack(def.x, isCounterRiposte ? 1.15 : 1.0, isCounterRiposte ? '#fde047' : prof.color);
+      }
       if (prof.isArmorBreak || prof.tier >= 4 || isCounterRiposte) {
-        spawnGroundCrack(def.x, isCounterRiposte ? 1.25 : 1.0, isCounterRiposte ? '#fde047' : prof.color);
         spawnDust(def.x, facing);
         spawnDust(def.x, -facing);
       }
 
-      // ★ 5원소 8프레임 초고속(20 FPS + 크로스페이드) 32비트 픽셀아트 애니메이션! ★
-      if (sk.element === 'FIRE' || sk.element === 'LIGHTNING' || sk.element === 'ICE' || sk.element === 'SHADOW' || sk.isForbidden || (sk.element === 'QI' && prof.tier >= 2)) {
+      // 5원소 8프레임 픽셀아트 애니메이션
+      if (hasElementBurst) {
         if (sk.isForbidden || sk.element === 'SHADOW') {
-          spawnVfxAnim({ x: def.x, y: 242, sheetSrc: VFX_SHEETS.SHADOW_8F, frameSeq: SEQ_8F, scale: 1.58, duration: 0.44 });
+          spawnVfxAnim({ x: def.x, y: 242, sheetSrc: VFX_SHEETS.SHADOW_8F, frameSeq: SEQ_8F, scale: 1.5, duration: 0.46 });
         } else if (sk.element === 'FIRE') {
-          spawnVfxAnim({ x: def.x, y: 222, sheetSrc: VFX_SHEETS.FIRE_8F, frameSeq: SEQ_8F, scale: 1.65, duration: 0.42 });
+          spawnVfxAnim({ x: def.x, y: 222, sheetSrc: VFX_SHEETS.FIRE_8F, frameSeq: SEQ_8F, scale: 1.56, duration: 0.46 });
         } else if (sk.element === 'LIGHTNING') {
-          spawnVfxAnim({ x: def.x, y: 214, sheetSrc: VFX_SHEETS.LIGHTNING_8F, frameSeq: SEQ_8F, scale: 1.72, duration: 0.38 });
+          spawnVfxAnim({ x: def.x, y: 214, sheetSrc: VFX_SHEETS.LIGHTNING_8F, frameSeq: SEQ_8F, scale: 1.62, duration: 0.42 });
         } else if (sk.element === 'ICE') {
-          spawnVfxAnim({ x: def.x, y: 242, sheetSrc: VFX_SHEETS.ICE_8F, frameSeq: SEQ_8F, scale: 1.56, duration: 0.44 });
+          spawnVfxAnim({ x: def.x, y: 242, sheetSrc: VFX_SHEETS.ICE_8F, frameSeq: SEQ_8F, scale: 1.48, duration: 0.46 });
         } else {
-          spawnVfxAnim({ x: def.x, y: 226, sheetSrc: VFX_SHEETS.QI_8F, frameSeq: SEQ_8F, scale: 1.62, duration: 0.44 });
+          spawnVfxAnim({ x: def.x, y: 226, sheetSrc: VFX_SHEETS.QI_8F, frameSeq: SEQ_8F, scale: 1.52, duration: 0.46 });
         }
       }
 
@@ -1030,19 +1094,22 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         }
       }
 
-      spawnParticles(def.x, 255, sk.element === 'PHYSICAL' && !isCounterRiposte ? '#fca5a5' : prof.color, prof.particles);
+      // 파편과 쇠불꽃은 맞은 쪽에서 때린 방향으로 쏠려 튄다. 원소 폭발이 있으면 수를 줄인다.
+      const debrisMult = hasElementBurst ? 0.5 : 1;
+      spawnParticles(def.x, 255, sk.element === 'PHYSICAL' && !isCounterRiposte ? '#fca5a5' : prof.color, Math.round(prof.particles * 0.7 * debrisMult), 6.5, 0.16, facing);
       spawnSparks(
         def.x,
         255,
         isCounterRiposte ? '#fde047' : sk.element === 'PHYSICAL' ? '#fed7aa' : prof.color,
-        isCounterRiposte ? 20 : 8 + prof.tier * 3,
-        isCounterRiposte ? 13 : 9 + prof.tier
+        Math.round((isCounterRiposte ? 18 : 7 + prof.tier * 3) * debrisMult),
+        isCounterRiposte ? 13 : 9 + prof.tier,
+        facing
       );
 
       const dmgLabel = isCounterRiposte ? `반격 -${dmg}!` : isSecondHit ? `연격 -${dmg}` : `-${dmg}`;
-      floatsRef.current.push({
-        x: def.x + (isSecondHit ? facing * 20 : 0),
-        y: isSecondHit ? 158 : 185,
+      pushFloat({
+        x: def.x + facing * 62,
+        y: FLOAT_DAMAGE_Y,
         text: dmgLabel,
         color: isCounterRiposte ? '#fde047' : prof.tier >= 3 ? prof.color : '#fca5a5',
         life: 0.9,
@@ -1299,7 +1366,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           spawnGhostTrail(def, atk, !atkIsP, 1, 2, '#38bdf8');
           def.x = Math.max(92, Math.min(CANVAS_W - 92, def.x + facing * 78));
           sound.playDash(panAt(def.x));
-          floatsRef.current.push({ x: def.x, y: 176, text: '허공 보법 회피!', color: '#38bdf8', life: 0.78, maxLife: 0.78 });
+          pushFloat({ x: def.x, y: FLOAT_STATUS_Y, text: '허공 보법 회피!', color: '#38bdf8', life: 0.78, maxLife: 0.78 });
           pushLog(`${def.name}, ${sk.customName || sk.name}의 강공을 종이 한 장 차이로 회피!`);
           return;
         }
@@ -1309,46 +1376,48 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         if (!blocksPrevented && Math.random() < effectiveParry) {
           const nextChain = curChain + 1;
           def.blockingUntil = now + 220;
+          def.clashPoseUntil = 0;
           def.action = null;
           atk.action = null;
-          atk.hurtPoseUntil = now + 180;
+          // 막힌 쪽은 맞은 것이 아니다: 칼을 내지른 자세 그대로 맞물려 버티다가 튕겨 나온다. (잠깐 다음 수를 내지 못할 뿐)
+          atk.clashFrame = act.isCounterRiposte || sk.form === 'THRUST' || sk.form === 'STRIKE' || sk.form === 'GRAPPLE' ? 6 : sk.form === 'STEP' ? 4 : 3;
+          atk.clashPoseUntil = now + 250;
+          atk.stunUntil = Math.max(atk.stunUntil, now + 180);
           atk.posture = Math.max(0, atk.posture - (34 + nextChain * 6));
           def.qi = Math.min(def.maxQi, def.qi + 16);
           def.counterBuffUntil = now + 2200;
 
-          const clashX = Math.round((atk.x + def.x) / 2);
+          // 칼이 맞부딪히면 두 사람 모두 한 발씩 밀려난다. 반격하는 쪽이 매번 42px씩 파고들기 때문에,
+          // 이렇게 벌려 주지 않으면 연환이 길어질수록 두 사람이 한 몸처럼 겹쳐 버린다.
+          const atkX0 = atk.x;
+          const defX0 = def.x;
+          atk.x = Math.max(92, Math.min(CANVAS_W - 92, atk.x - facing * 24));
+          // 한쪽이 무대 끝에 몰려 물러설 자리가 없으면, 못 물러난 만큼 다른 쪽이 더 밀려난다.
+          const blocked = 24 - Math.abs(atk.x - atkX0);
+          def.x = Math.max(92, Math.min(CANVAS_W - 92, def.x + facing * (18 + blocked)));
+          if (Math.abs(def.x - defX0) < 18) {
+            atk.x = Math.max(92, Math.min(CANVAS_W - 92, atk.x - facing * (18 - Math.abs(def.x - defX0))));
+          }
+          atk.recoilOffset += atkX0 - atk.x;
+          def.recoilOffset += defX0 - def.x;
+          atk.lungeOffset *= 0.4;
+
+          const clashX = Math.round((atkX0 + defX0) / 2);
           sound.playParry(true, nextChain, panAt(clashX));
-          // 연환 공방이 깊어질수록 템포가 가속되며 카앙-카앙-카카앙!! 리듬감 극대화!
-          const fastHitstop = Math.max(95, 200 - nextChain * 22);
-          metaRef.current.hitstopUntil = now + fastHitstop;
-          metaRef.current.parryFlashUntil = now + Math.max(160, 290 - nextChain * 25);
-          metaRef.current.shakeUntil = now + 180;
-          metaRef.current.shakePower = Math.min(18, 9 + nextChain * 2);
+          // 패링은 짧고 경쾌하게: 히트스톱은 한 박자만, 화면은 살짝만 떨고, 맞부딪힌 자리에서 쇠불꽃이 튄다.
+          // 합이 깊어질수록 불꽃이 커지고 박자는 조금씩 빨라진다.
+          // "챙!" — 맞부딪힌 순간 짧게 멈추고, 이어서 슬로모션으로 풀린다. 불꽃은 그 사이에 느리게 터져 나온다.
+          const pause = getClashPause(nextChain);
+          metaRef.current.hitstopUntil = now + pause.freezeMs;
+          metaRef.current.clashSlowUntil = now + pause.freezeMs + pause.slowMs;
+          metaRef.current.parryFlashStart = now;
+          metaRef.current.parryChain = nextChain;
+          metaRef.current.parryFlashUntil = now + pause.freezeMs + pause.slowMs + 160;
+          metaRef.current.shakeUntil = now + 150;
+          metaRef.current.shakePower = Math.min(13, 5 + nextChain * 1.4);
           if (!atkIsP) metaRef.current.justParries += 1;
 
-          const parryColor = nextChain >= 4 ? '#f43f5e' : nextChain >= 3 ? '#fb923c' : '#fde047';
-          // ★ 32비트 픽셀 정밀 간파 별빛 섬광(1~2합) → 초절정 진홍·황금 연환 폭발(3합+) ★
-          spawnVfxAnim({
-            x: clashX,
-            y: 250,
-            sheetSrc: VFX_SHEETS.SLASH_PARRY,
-            frameSeq: nextChain >= 3 ? [4, 5] : [4],
-            scale: 1.2 + nextChain * 0.14,
-            duration: 0.36,
-          });
-          spawnSparks(clashX, 252, parryColor, 20 + nextChain * 5, 13 + nextChain);
-
-          const chainPopup =
-            nextChain === 1
-              ? '看破!'
-              : nextChain === 2
-              ? '재반격! (2합)'
-              : nextChain === 3
-              ? '연환 간파!! (3합)'
-              : nextChain === 4
-              ? '초절정 공방!! (4합)'
-              : `천하극의 공방!!! (${nextChain}합)`;
-          floatsRef.current.push({ x: def.x, y: 148, text: chainPopup, color: nextChain >= 4 ? '#f43f5e' : nextChain >= 3 ? '#fb923c' : '#fde047', life: 0.9, maxLife: 0.9, scale: Math.min(1.8, 1.35 + nextChain * 0.08) });
+          deflectsRef.current.push(createDeflectSpark(clashX, 236, facing, nextChain));
 
           // 반격 초식을 번갈아 꺼내며 가속 연환 반격 예약!
           const counterSkill = parryCount > 0 ? defParrySkills[(nextChain - 1) % parryCount] : def.skills[0];
@@ -1381,13 +1450,25 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
     const tick = (now: number) => {
       const rawDt = Math.min(0.05, (now - lastTime) / 1000);
       lastTime = now;
+      // 칼이 맞부딪힌 직후에는 정지(히트스톱)에 이어 잠깐 슬로모션이 걸린다 — "챙!" 하고 멈췄다 풀리는 박자
+      const inClashSlow = now >= metaRef.current.hitstopUntil && now < metaRef.current.clashSlowUntil;
       const timeScale =
         now < metaRef.current.hitstopUntil
           ? 0.08
+          : inClashSlow
+          ? 0.3
           : now < metaRef.current.timeSlowUntil
           ? 0.24
           : 1.0;
       const dt = rawDt * timeScale * speedRef.current;
+      // 히트스톱 동안 싸우는 두 사람은 멈추지만, 이펙트와 파편은 느리게나마 계속 흘러야 타격 순간이 살아 보인다.
+      const fxDt = rawDt * Math.max(timeScale, 0.42) * speedRef.current;
+      const fxStep = fxDt * 60; // 프레임당 이동량으로 적혀 있는 값(파티클 속도 등)에 곱한다
+      // 패링 불꽃의 시계: 부딪힌 순간에는 거의 멈춰 있다가 슬로모션 동안 절반 속도로 터져 나온다
+      const deflectRate = now < metaRef.current.hitstopUntil ? DEFLECT_RATE_FREEZE : inClashSlow ? DEFLECT_RATE_SLOW : 1;
+      deflectsRef.current.forEach((df) => {
+        df.age += rawDt * 1000 * deflectRate * speedRef.current;
+      });
 
       // ★ 11연참 초고속 픽셀 단획 암전 연참 + 납도 정적 → 일제 파열 사운드 구동! ★
       if (darkFlurryRef.current) {
@@ -1420,9 +1501,42 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       const e = enemyRef.current;
       if (!p || !e) return;
 
+      // 히트스톱: 초식의 진행은 실제 시각으로 재므로, 멈춘 만큼 두 사람의 시간표를 통째로 뒤로 밀어야 정말로 멈춘다.
+      // (밀지 않으면 화면만 느려지고 다음 동작은 제 시각에 터져서, 연참 연출 도중에 상대가 반격해 오는 일이 생긴다)
+      // 패링 뒤의 슬로모션 구간도 같은 방식으로 느려진 만큼 민다 (예약된 연환 반격 포함).
+      if ((now < metaRef.current.hitstopUntil || inClashSlow) && !metaRef.current.finished) {
+        const hold = rawDt * 1000 * (1 - timeScale);
+        [p, e].forEach((f) => {
+          if (f.action) f.action.startAt += hold;
+          if (f.pendingCounter) f.pendingCounter.triggerAt += hold;
+          f.blockingUntil += hold;
+          f.invulnUntil += hold;
+          f.stunUntil += hold;
+          f.clashPoseUntil += hold;
+          f.groggyUntil += hold;
+          f.hurtPoseUntil += hold;
+          f.counterBuffUntil += hold;
+          f.shoutUntil += hold;
+          Object.keys(f.cooldowns).forEach((k) => {
+            f.cooldowns[k] += hold;
+          });
+        });
+        metaRef.current.pThinkAt += hold;
+        metaRef.current.eThinkAt += hold;
+      }
+
       if (!metaRef.current.finished) {
-        p.lungeOffset *= 0.8;
-        e.lungeOffset *= 0.8;
+        // 내지른 자세는 히트스톱 동안 그대로 버티고, 풀린 뒤에 거둔다. 밀려난 쪽도 그때 미끄러진다.
+        if (now >= metaRef.current.hitstopUntil) {
+          // 패링 뒤 슬로모션 중에는 밀려나는 움직임도 같은 비율로 느려진다
+          const pace = rawDt * 60 * speedRef.current * (inClashSlow ? 0.3 : 1);
+          const settle = Math.pow(0.8, pace);
+          p.lungeOffset *= settle;
+          e.lungeOffset *= settle;
+          const slide = Math.pow(0.72, pace);
+          p.recoilOffset = Math.abs(p.recoilOffset) < 0.5 ? 0 : p.recoilOffset * slide;
+          e.recoilOffset = Math.abs(e.recoilOffset) < 0.5 ? 0 : e.recoilOffset * slide;
+        }
         p.qi = Math.min(p.maxQi, p.qi + (8.5 + p.stats.wil * 0.16) * (1 + (p.passiveBonus?.qiRegen || 0)) * dt);
         e.qi = Math.min(e.maxQi, e.qi + 10.5 * dt);
 
@@ -1583,50 +1697,57 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
 
       // 이펙트 파티클/잔상/VFX 수명 갱신
       particlesRef.current = particlesRef.current.filter((pt) => {
-        pt.x += pt.vx;
-        pt.y += pt.vy;
-        pt.vy += pt.gravity ?? 0.16;
-        pt.life -= dt;
+        pt.x += pt.vx * fxStep;
+        pt.y += pt.vy * fxStep;
+        pt.vy += (pt.gravity ?? 0.16) * fxStep;
+        // 쇠불꽃은 공기에 걸려 금세 느려진다
+        if (pt.kind === 'SPARK') {
+          const drag = Math.pow(0.9, fxStep);
+          pt.vx *= drag;
+          pt.vy *= drag;
+        }
+        pt.life -= fxDt;
         return pt.life > 0;
       });
       floatsRef.current = floatsRef.current.filter((fl) => {
-        fl.y -= 28 * dt;
-        fl.life -= dt;
+        fl.y -= 26 * fxDt;
+        fl.life -= fxDt;
         return fl.life > 0;
       });
       ghostsRef.current = ghostsRef.current.filter((g) => {
-        g.life -= dt;
+        // 잔상은 히트스톱과 상관없이 제 속도로 스러진다 (오래 남으면 연기 덩어리처럼 보인다)
+        g.life -= rawDt * speedRef.current;
         return g.life > 0;
       });
       vfxSpritesRef.current = vfxSpritesRef.current.filter((v) => {
-        v.x += v.vx * dt;
-        v.y += v.vy * dt;
-        v.life -= dt;
+        v.x += v.vx * fxDt;
+        v.y += v.vy * fxDt;
+        v.life -= fxDt;
         return v.life > 0;
       });
       slashLinesRef.current = slashLinesRef.current.filter((sl) => {
-        sl.life -= dt;
+        sl.life -= fxDt;
         return sl.life > 0;
       });
       bladeArcsRef.current = bladeArcsRef.current.filter((ba) => {
-        ba.life -= dt;
+        ba.life -= fxDt;
         return ba.life > 0;
       });
       flaresRef.current = flaresRef.current.filter((fl) => {
-        fl.life -= dt;
+        fl.life -= fxDt;
         return fl.life > 0;
       });
       cracksRef.current = cracksRef.current.filter((cr) => {
-        cr.life -= dt;
+        cr.life -= fxDt;
         return cr.life > 0;
       });
       ringsRef.current = ringsRef.current.filter((rg) => {
-        rg.life -= dt;
+        rg.life -= fxDt;
         rg.radius = rg.maxRadius * (1 - rg.life / rg.maxLife);
         return rg.life > 0;
       });
       magicFxRef.current = magicFxRef.current.filter((mf) => {
-        mf.life -= dt;
+        mf.life -= fxDt;
         return mf.life > 0;
       });
 
@@ -1647,9 +1768,10 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           const camLeft = viewW < CANVAS_W ? Math.round(battleCamXRef.current - viewW / 2) : 0;
           const camTop = viewH < CANVAS_H ? Math.round((CANVAS_H - viewH) * 0.65) : 0;
 
+          // 화면 흔들림은 끝으로 갈수록 잦아든다 (일정한 세기로 떨다 뚝 멈추면 화면이 깨진 것처럼 보인다)
           if (now < metaRef.current.shakeUntil) {
-            const sp = metaRef.current.shakePower;
-            ctx.translate((Math.random() - 0.5) * sp, (Math.random() - 0.5) * sp * 0.7);
+            const sp = metaRef.current.shakePower * Math.min(1, (metaRef.current.shakeUntil - now) / 150);
+            ctx.translate(Math.round((Math.random() - 0.5) * sp), Math.round((Math.random() - 0.5) * sp * 0.6));
           }
 
           ctx.save();
@@ -1679,7 +1801,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             const dh = Math.round(sp.height * ratio);
             const ax = Math.round(sp.anchorX * ratio);
             ctx.save();
-            ctx.globalAlpha = (g.life / g.maxLife) * 0.45;
+            ctx.globalAlpha = Math.pow(g.life / g.maxLife, 1.5) * 0.4;
             ctx.translate(Math.round(g.x), g.y);
             ctx.scale(g.flipX, 1);
             ctx.drawImage(sp.ghostCanvas || sp.canvas, -ax, -dh + 6, dw, dh);
@@ -1689,6 +1811,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           // 8프레임 무술 포즈 결정기 (초식 형태별 정밀 분기: SLASH / THRUST / STRIKE·GRAPPLE / STEP / PARRY!)
           const resolvePoseFrame = (f: FighterRuntime): number => {
             if (now < f.hurtPoseUntil) return 7; // [7] 피격 밀림
+            if (now < f.clashPoseUntil && !f.action) return f.clashFrame; // 막힌 칼: 내지른 자세로 맞물림
             if (now < f.blockingUntil || f.pendingCounter) return 5; // [5] 패링/흘리기 방어
             if (f.action) {
               const act = f.action;
@@ -1715,7 +1838,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           };
 
           const drawFighter = (f: FighterRuntime, sheetSrc: string, nativeDir: 1 | -1, wantDir: 1 | -1, isHeroSide: boolean) => {
-            const drawX = Math.round(f.x + f.lungeOffset);
+            // 맞은 쪽은 히트스톱 동안 제자리에서 잘게 떨다가, 풀리면 뒤로 미끄러진다.
+            const shiver = now < f.hurtPoseUntil && now < metaRef.current.hitstopUntil && f.hp > 0 ? (Math.floor(now / 34) % 2 === 0 ? 2 : -2) : 0;
+            const drawX = Math.round(f.x + f.lungeOffset + f.recoilOffset + shiver);
 
             // ★ 패배(HP <= 0) 시 실제 바닥에 쓰러진 KO 스프라이트(grid_ko_fallen_4x2.jpg) 렌더링! ★
             if (f.hp <= 0) {
@@ -1795,17 +1920,38 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             ctx.save();
             ctx.translate(drawX, GROUND_Y - breathY);
             ctx.scale(flipX, 1);
-            ctx.drawImage(now < f.hurtFlashUntil ? sp.flashCanvas : sp.canvas, -ax, -dh + 6, dw, dh);
+            const flashLeft = f.hurtFlashUntil - now;
+            if (flashLeft > HIT_FLASH_MS - HIT_FLASH_WHITE_MS) {
+              ctx.drawImage(sp.flashCanvas, -ax, -dh + 6, dw, dh);
+            } else {
+              ctx.drawImage(sp.canvas, -ax, -dh + 6, dw, dh);
+              if (flashLeft > 0) {
+                ctx.globalAlpha = 0.6 * Math.pow(flashLeft / (HIT_FLASH_MS - HIT_FLASH_WHITE_MS), 1.4);
+                ctx.drawImage(sp.flashCanvas, -ax, -dh + 6, dw, dh);
+                ctx.globalAlpha = 1;
+              }
+            }
             ctx.restore();
 
             // ★ 캐릭터 머리 위 무협 기술 외침 말풍선! ★
             if (now < f.shoutUntil && f.shoutText) {
-              const bx = Math.max(130, Math.min(CANVAS_W - 130, drawX));
               const by = GROUND_Y - 196;
               ctx.save();
               ctx.font = 'bold 13px NeoDunggeunmo, monospace';
               const tw = ctx.measureText(f.shoutText).width;
               const pw = Math.max(116, tw + 22);
+              // 두 사람이 붙어서 동시에 외치면 말풍선이 겹친다. 그럴 때는 둘 사이의 가운데를 경계로 좌우로 비켜 세운다.
+              let bx = Math.max(pw / 2 + 6, Math.min(CANVAS_W - pw / 2 - 6, drawX));
+              const other = f === p ? e : p;
+              if (now < other.shoutUntil && other.shoutText && other.hp > 0) {
+                const otw = Math.max(116, ctx.measureText(other.shoutText).width + 22);
+                const otherX = other.x + other.lungeOffset + other.recoilOffset;
+                if (Math.abs(otherX - drawX) < (pw + otw) / 2 + 8) {
+                  const mid = (otherX + drawX) / 2;
+                  const side = drawX <= otherX ? -1 : 1;
+                  bx = Math.max(pw / 2 + 6, Math.min(CANVAS_W - pw / 2 - 6, mid + side * (pw / 2 + 4)));
+                }
+              }
               const ph = f.shoutSub ? 38 : 26;
               ctx.fillStyle = f.shoutIsCounter ? 'rgba(92, 18, 16, 0.94)' : 'rgba(20, 13, 8, 0.92)';
               ctx.fillRect(Math.round(bx - pw / 2), Math.round(by - ph), Math.round(pw), ph);
@@ -1814,7 +1960,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
               ctx.strokeRect(Math.round(bx - pw / 2), Math.round(by - ph), Math.round(pw), ph);
               // 말풍선 꼬리
               ctx.fillStyle = f.shoutIsCounter ? '#fde047' : '#d4a359';
-              ctx.fillRect(Math.round(bx - 3), Math.round(by), 6, 5);
+              ctx.fillRect(Math.round(Math.max(bx - pw / 2 + 8, Math.min(bx + pw / 2 - 14, drawX - 3))), Math.round(by), 6, 5);
 
               ctx.textAlign = 'center';
               ctx.fillStyle = f.shoutIsCounter ? '#fde047' : '#fff7d6';
@@ -2031,14 +2177,13 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           const waveSheet = getVfxGridSheet(VFX_SHEETS.LEGACY, 4, 2);
           if (waveSheet && waveSheet.frames.length === 8) {
             ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
             wavesRef.current.forEach((wv) => {
               const cell = waveSheet.frames[wv.vfxIdx % 8];
               const size = Math.round(145 * wv.scale);
               ctx.save();
               ctx.translate(Math.round(wv.x), Math.round(wv.y));
               ctx.scale(wv.facing, 1);
-              ctx.drawImage(cell, -size / 2, -size / 2, size, size);
+              drawGlowSprite(ctx, cell, -size / 2, -size / 2, size, size, 1, 0.35);
               ctx.restore();
             });
             ctx.restore();
@@ -2178,14 +2323,25 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             ctx.restore();
           });
 
+          // 패링 불꽃 (실제 시각으로 그리므로 히트스톱 중에도 제 속도로 튄다)
+          deflectsRef.current = deflectsRef.current.filter((df) => renderDeflectSpark(ctx, df));
+
           // 데미지·상태 팝업 텍스트 (월드 좌표 종료!)
           floatsRef.current.forEach((fl) => {
-            ctx.font = `bold ${Math.round(17 * (fl.scale || 1))}px NeoDunggeunmo, monospace`;
+            // 톡 튀어나왔다가 제 크기로 가라앉고, 끝의 35%에서 옅어지며 사라진다.
+            const age = fl.maxLife - fl.life;
+            const pop = age < 0.09 ? 1.3 - (age / 0.09) * 0.3 : 1;
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, Math.min(1, fl.life / (fl.maxLife * 0.35)));
+            ctx.font = `bold ${Math.round(17 * (fl.scale || 1) * pop)}px NeoDunggeunmo, monospace`;
             ctx.textAlign = 'center';
-            ctx.fillStyle = '#120a06';
-            ctx.fillText(fl.text, Math.round(fl.x) + 2, Math.round(fl.y) + 2);
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#120a06';
+            ctx.strokeText(fl.text, Math.round(fl.x), Math.round(fl.y));
             ctx.fillStyle = fl.color;
             ctx.fillText(fl.text, Math.round(fl.x), Math.round(fl.y));
+            ctx.restore();
           });
 
           ctx.restore(); // 월드 카메라 변환 해제 → 화면 기준 오버레이(타임슬로우·암전연참·컷인·간파) 중앙 정렬!
@@ -2356,12 +2512,48 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
 
           // 간파(看破) 순간 백색 플래시 + 붉은 붓글씨 인장
           if (now < metaRef.current.parryFlashUntil) {
-            ctx.fillStyle = 'rgba(255, 248, 215, 0.3)';
-            ctx.fillRect(0, 0, viewW, viewH);
-            ctx.font = 'bold 70px "Noto Serif KR", NeoDunggeunmo, serif';
-            ctx.fillStyle = '#b52b27';
+            // 화면 전체를 덮는 섬광은 쓰지 않는다. 작은 「看破」 표식만 톡 찍혔다 사라지고, 합이 깊어질수록 커진다.
+            const span = Math.max(1, metaRef.current.parryFlashUntil - metaRef.current.parryFlashStart);
+            const t = Math.max(0, Math.min(1, (now - metaRef.current.parryFlashStart) / span));
+            const chain = metaRef.current.parryChain;
+            const k = Math.min(6, chain);
+            // 부딪힌 순간 화면이 따뜻한 빛으로 아주 잠깐 번쩍인다 (0.1초 안에 걷힌다)
+            const sinceMs = now - metaRef.current.parryFlashStart;
+            if (sinceMs < 100) {
+              ctx.fillStyle = `rgba(255, 236, 200, ${((0.16 + k * 0.02) * Math.pow(1 - sinceMs / 100, 2)).toFixed(3)})`;
+              ctx.fillRect(0, 0, viewW, viewH);
+            }
+            const pop = 1 + 0.4 * Math.pow(1 - Math.min(1, t / 0.18), 2);
+            const size = 24 + k * 3.6;
+            ctx.save();
+            ctx.globalAlpha = t < 0.5 ? 1 : 1 - (t - 0.5) / 0.5;
+            ctx.translate(viewW / 2, 104);
+            ctx.scale(pop, pop);
             ctx.textAlign = 'center';
-            ctx.fillText('看破', viewW / 2, Math.round(viewH * 0.42));
+            ctx.textBaseline = 'middle';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = 'rgba(20, 8, 6, 0.9)';
+            const kanjiFont = `bold ${Math.round(size)}px "Noto Serif KR", NeoDunggeunmo, serif`;
+            const countFont = `bold ${Math.round(size * 0.62)}px NeoDunggeunmo, monospace`;
+            const countText = chain >= 2 ? `${chain}합` : '';
+            ctx.font = kanjiFont;
+            const kw = ctx.measureText('看破').width;
+            ctx.font = countFont;
+            const cw = countText ? ctx.measureText(countText).width + 8 : 0;
+            const left = -(kw + cw) / 2;
+            ctx.font = kanjiFont;
+            ctx.textAlign = 'left';
+            ctx.strokeText('看破', left, 0);
+            ctx.fillStyle = chain >= 5 ? '#ff5a3c' : chain >= 3 ? '#ff8a3c' : '#ffb347';
+            ctx.fillText('看破', left, 0);
+            if (countText) {
+              ctx.font = countFont;
+              ctx.strokeText(countText, left + kw + 8, 2);
+              ctx.fillStyle = '#fff3d0';
+              ctx.fillText(countText, left + kw + 8, 2);
+            }
+            ctx.restore();
           }
 
           ctx.restore();

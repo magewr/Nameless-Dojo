@@ -752,8 +752,13 @@ export const DojoSimView: React.FC<Props> = ({
                   <button onClick={() => { sound.playClick(); onOpenDojo(); }} className="flex-1 sm:flex-none rpg-btn px-2 py-1 text-[11px] flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap">
                     <Building2 className="w-3.5 h-3.5 text-amber-300 shrink-0" /><span>도장</span>
                   </button>
-                  <button onClick={() => { sound.playClick(); onOpenDisciples(); }} className="flex-1 sm:flex-none rpg-btn px-2 py-1 text-[11px] flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap">
-                    <Users className="w-3.5 h-3.5 text-sky-300 shrink-0" /><span>제자</span>
+                  <button onClick={() => { sound.playClick(); onOpenDisciples(); }} className="relative flex-1 sm:flex-none rpg-btn px-2 py-1 text-[11px] flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap">
+                    <Users className="w-3.5 h-3.5 text-sky-300 shrink-0" /><span>제자·문파</span>
+                    {/* 마음이 뜬 제자나 적대 문파가 있으면 눈에 띄게 알린다 */}
+                    {(state.disciples.some((d) => !d.dead && (d.loyalty < 45 || (d.temperament === 'SCHEMER' && d.exposed))) ||
+                      (state.sects || []).some((sc) => sc.met && !sc.allied && sc.relation <= -50)) && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 border border-red-200 rounded-full" />
+                    )}
                   </button>
                   {state.merchantOffer && (
                     <button onClick={() => { sound.playClick(); onOpenMerchant(); }} className="seal-badge px-2 py-1 text-[11px] font-bold animate-pulse cursor-pointer whitespace-nowrap">

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BattleTactic,
   CountryId,
@@ -47,11 +47,17 @@ import { AutoBattleView } from './components/AutoBattleView';
 import { TrainingAndCraftingModal } from './components/TrainingAndCraftingModal';
 import { DojoAndWeaponsModal } from './components/DojoAndWeaponsModal';
 import { DisciplesAndFamilyModal } from './components/DisciplesAndFamilyModal';
+import { ensureSectsAndTemperaments, expelDisciple, requestSectSpar, sendSectGift, talkToDisciple } from './engine/sectLogic';
 import { EventModal, EventResultModal, EventResultNotice, MerchantModal, TraitSelectModal } from './components/MerchantAndEventModals';
 import { EndingReportView } from './components/EndingReportView';
+import { withMilestones } from './engine/milestones';
 
 export function App() {
-  const [state, setState] = useState<GameState | null>(null);
+  const [state, setStateRaw] = useState<GameState | null>(null);
+  // 모든 상태 변경이 이 함수를 거친다. 바뀐 내용을 이전 상태와 비교해 생전 주요 사건(milestones)을 자동 기록한다.
+  const setState = useCallback((update: React.SetStateAction<GameState | null>) => {
+    setStateRaw((prev) => withMilestones(prev, typeof update === 'function' ? update(prev) : update));
+  }, []);
   const [creating, setCreating] = useState(false);
 
   const [trainModalTab, setTrainModalTab] = useState<'TRAIN' | 'CRAFT' | 'BOOKS' | null>(null);
@@ -232,7 +238,9 @@ export function App() {
       if (!loaded.flags.storyMemory) loaded.flags.storyMemory = {};
       if (loaded.activeBuild === undefined) loaded.activeBuild = null;
       if (!loaded.graduatedDisciples) loaded.graduatedDisciples = [];
-      setState(loaded);
+      if (!loaded.milestones) loaded.milestones = [];
+      // 문파 관계·문하생 기질이 없던 시절의 세이브는 지금 난이도에 맞춰 채운다.
+      setState(ensureSectsAndTemperaments(loaded));
       setCreating(false);
     }
   };
@@ -597,6 +605,16 @@ export function App() {
               return d.id === dId ? { ...d, role } : d;
             });
             setState({ ...state, disciples: nextD });
+          }}
+          onTalk={(dId) => setState(talkToDisciple(state, dId))}
+          onExpel={(dId) => setState(expelDisciple(state, dId))}
+          onSectGift={(sectId) => setState(sendSectGift(state, sectId))}
+          onSectSpar={(sectId) => {
+            const next = requestSectSpar(state, sectId);
+            if (next !== state) {
+              setShowDisciplesModal(false);
+              setState(next);
+            }
           }}
         />
       )}

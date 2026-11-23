@@ -11,6 +11,12 @@ import {
 } from '../pixel/spriteLoader';
 import {
   createDarkFlurry,
+  createDeflectSpark,
+  DEFLECT_RATE_FREEZE,
+  DEFLECT_RATE_SLOW,
+  DeflectSpark,
+  getClashPause,
+  renderDeflectSpark,
   createKoOneStroke,
   DarkFlurryState,
   drawSmoothVfxSprite,
@@ -20,6 +26,9 @@ import {
   SEQ_8F,
 } from '../pixel/katanaVfxRenderer';
 import { sound } from '../engine/sound';
+import { AutoBattleView } from './AutoBattleView';
+import { BATTLE_PREVIEW_PRESETS, buildBattlePreview } from './battlePreviewPresets';
+import { BattleConfig, GameState } from '../types/game';
 import { ArrowLeft, Flame, Play, Shield, Snowflake, Sparkles, Swords, Volume2, VolumeX, Zap } from 'lucide-react';
 
 interface Particle {
@@ -50,10 +59,16 @@ export const VfxAudioShowcase: React.FC = () => {
   const [autoPlay, setAutoPlay] = useState(false);
   const [chainCount, setChainCount] = useState(1);
   const [lastLabel, setLastLabel] = useState('아래 버튼을 눌러 32비트 픽셀 스프라이트 VFX + 입체 효과음을 체험해 보세요!');
+  // 실제 전투 화면 미리보기 (실전과 같은 코드로 이펙트를 확인한다)
+  const [preview, setPreview] = useState<{ state: GameState; battle: BattleConfig } | null>(null);
 
   const fxRef = useRef({
     particles: [] as Particle[],
     anims: [] as SpriteAnimVfx[],
+    deflects: [] as DeflectSpark[],
+    enemyNoKnockUntil: 0,
+    clashFreezeUntil: 0,
+    clashSlowUntil: 0,
     darkFlurry: null as DarkFlurryState | null,
     koStroke: null as KoOneStrokeState | null,
     heroX: 280,
@@ -124,7 +139,7 @@ export const VfxAudioShowcase: React.FC = () => {
     const s = fxRef.current;
     const tx = s.enemyX;
     s.heroFrame = 3; s.heroActionUntil = now + 380;
-    s.enemyFrame = 7; s.enemyHurtUntil = now + 340; s.enemyFlashUntil = now + 130;
+    s.enemyFrame = 7; s.enemyHurtUntil = now + 340; s.enemyFlashUntil = now + 170;
     s.shakeUntil = now + 180; s.shakePower = 11;
     sound.playUnsheathe(resolvePan(-0.45));
     setTimeout(() => {
@@ -135,8 +150,10 @@ export const VfxAudioShowcase: React.FC = () => {
       x: tx - 14, y: GY - 64, vx: 32,
       sheetSrc: unarmed ? VFX_SHEETS.SLASH_PARRY : VFX_SHEETS.SLASH_8F,
       frameSeq: unarmed ? [3] : SEQ_8F,
-      scale: 1.48, duration: slowView ? 0.68 : 0.28,
+      scale: unarmed ? 0.9 : 1.48, duration: slowView ? 0.68 : 0.28,
     });
+    // 칼끝이 닿은 자리의 짧은 섬광 (실전과 같은 구성)
+    spawnVfx({ x: tx - 10, y: GY - 70, sheetSrc: VFX_SHEETS.LEGACY, frameSeq: [7], scale: 0.56, duration: slowView ? 0.32 : 0.13 });
     spawnSparks(tx, GY - 64, '#7dd3fc', 16, 11);
     setBanner('⚔ 8프레임 초고속(30fps) 초승달 대참격 + 크로스페이드 + 3층 타격음', '#38bdf8');
   };
@@ -144,22 +161,22 @@ export const VfxAudioShowcase: React.FC = () => {
   const triggerParryChain = () => {
     const now = performance.now();
     const s = fxRef.current;
-    const nextC = chainCount >= 5 ? 1 : chainCount + 1;
+    const nextC = chainCount >= 8 ? 1 : chainCount + 1;
     setChainCount(nextC);
     const cx = Math.round((s.heroX + s.enemyX) / 2);
-    s.heroFrame = 5; s.heroActionUntil = now + 360;
-    s.enemyFrame = 7; s.enemyHurtUntil = now + 260; s.enemyFlashUntil = now + 110;
-    s.shakeUntil = now + 200; s.shakePower = 10 + nextC * 2;
-    const col = nextC >= 4 ? '#f43f5e' : nextC >= 3 ? '#fb923c' : '#fde047';
+    // 실전과 같은 구성: 막는 쪽은 간파 자세, 막힌 쪽은 칼을 내지른 자세 그대로(맞은 자세·흰 섬광 없음)
+    s.heroFrame = 5; s.heroActionUntil = now + 300;
+    s.enemyFrame = 3; s.enemyHurtUntil = now + 260; s.enemyNoKnockUntil = now + 260;
+    // 실전과 같은 박자: 부딪힌 순간 멈췄다가 슬로모션으로 풀린다
+    const pause = getClashPause(nextC);
+    s.clashFreezeUntil = now + pause.freezeMs;
+    s.clashSlowUntil = now + pause.freezeMs + pause.slowMs;
+    s.heroActionUntil = now + pause.freezeMs + pause.slowMs + 200;
+    s.enemyHurtUntil = s.heroActionUntil; s.enemyNoKnockUntil = s.heroActionUntil;
+    s.shakeUntil = now + 150; s.shakePower = Math.min(13, 5 + nextC * 1.4);
     sound.playParry(true, nextC, resolvePan(0));
-    spawnVfx({
-      x: cx, y: GY - 68,
-      sheetSrc: VFX_SHEETS.SLASH_PARRY,
-      frameSeq: nextC >= 3 ? [4, 5] : [4],
-      scale: 1.25 + nextC * 0.14, duration: slowView ? 0.68 : 0.28,
-    });
-    spawnSparks(cx, GY - 68, col, 22 + nextC * 4, 14);
-    setBanner(`✨ 정밀 간파 ${nextC}합 연환! (탄력 펀치 섬광 + 5중 비정수 강철 공명)`, col);
+    s.deflects.push(createDeflectSpark(cx + 16, GY - 78, 1, nextC));
+    setBanner(`✨ 간파 ${nextC}합 — 맞부딪힌 자리에서 튀는 쇠불꽃 (합이 깊어질수록 커진다)`, nextC >= 5 ? '#ff5a3c' : nextC >= 3 ? '#ff8a3c' : '#ffb347');
   };
 
   const triggerGuardBreak = () => {
@@ -167,7 +184,7 @@ export const VfxAudioShowcase: React.FC = () => {
     const s = fxRef.current;
     const tx = s.enemyX;
     s.heroFrame = 4; s.heroActionUntil = now + 420;
-    s.enemyFrame = 7; s.enemyHurtUntil = now + 700; s.enemyFlashUntil = now + 140;
+    s.enemyFrame = 7; s.enemyHurtUntil = now + 700; s.enemyFlashUntil = now + 170;
     s.shakeUntil = now + 240; s.shakePower = 14;
     sound.playGuardBreak(resolvePan(0.45));
     spawnVfx({ x: tx, y: GY - 70, sheetSrc: VFX_SHEETS.SLASH_PARRY, frameSeq: [6], scale: 1.45, duration: slowView ? 0.72 : 0.32 });
@@ -181,7 +198,7 @@ export const VfxAudioShowcase: React.FC = () => {
     const s = fxRef.current;
     const tx = s.enemyX;
     s.heroFrame = 6; s.heroActionUntil = now + 480;
-    s.enemyFrame = 7; s.enemyHurtUntil = now + 480; s.enemyFlashUntil = now + 130;
+    s.enemyFrame = 7; s.enemyHurtUntil = now + 480; s.enemyFlashUntil = now + 170;
     s.shakeUntil = now + 220; s.shakePower = 13;
     s.timeSlowUntil = now + 180;
     sound.playTimeSlow();
@@ -202,8 +219,8 @@ export const VfxAudioShowcase: React.FC = () => {
     } else {
       spawnVfx({ x: tx, y: GY - 84, sheetSrc: VFX_SHEETS.QI_8F, frameSeq: SEQ_8F, scale: 1.74, duration: 0.46 * durMult });
     }
-    spawnVfx({ x: tx, y: GY - 44, sheetSrc: VFX_SHEETS.SLASH_PARRY, frameSeq: [7], scale: 1.12, duration: 0.32 * durMult });
-    spawnSparks(tx, GY - 66, color, 18, 11);
+    // 원소 폭발이 주인공이므로 지면 균열 같은 다른 큰 장식은 겹치지 않는다 (실전과 같은 구성)
+    spawnSparks(tx, GY - 66, color, 10, 11);
     setBanner(label, color);
   };
 
@@ -212,7 +229,7 @@ export const VfxAudioShowcase: React.FC = () => {
     const s = fxRef.current;
     const tx = s.enemyX;
     s.heroFrame = 6; s.heroActionUntil = now + 980;
-    s.enemyFrame = 7; s.enemyHurtUntil = now + 1020; s.enemyFlashUntil = now + 130;
+    s.enemyFrame = 7; s.enemyHurtUntil = now + 1020; s.enemyFlashUntil = now + 170;
     s.darkFlurry = createDarkFlurry(now, tx, GY - 68, 1, '극의 절명 11연참 · 【천하일섬】');
     if (slowView) {
       s.darkFlurry.totalDurationMs = 2450;
@@ -227,7 +244,7 @@ export const VfxAudioShowcase: React.FC = () => {
     const tx = s.enemyX;
     s.heroFrame = 6; s.heroActionUntil = now + 650;
     s.enemyKoUntil = now + 2400;
-    s.enemyFlashUntil = now + 140;
+    s.enemyFlashUntil = now + 170;
     s.timeSlowUntil = now + 480;
     s.shakeUntil = now + 260; s.shakePower = 15;
     s.koStroke = createKoOneStroke(now, tx, GY - 68, 1);
@@ -280,6 +297,8 @@ export const VfxAudioShowcase: React.FC = () => {
       lastT = now;
       const s = fxRef.current;
       const dt = rawDt * (now < s.timeSlowUntil ? 0.35 : 1.0);
+      const deflectRate = now < s.clashFreezeUntil ? DEFLECT_RATE_FREEZE : now < s.clashSlowUntil ? DEFLECT_RATE_SLOW : 1;
+      s.deflects.forEach((df) => { df.age += rawDt * 1000 * deflectRate; });
 
       // 암전 11연참 초고속 단획 사운드 스케줄
       if (s.darkFlurry) {
@@ -338,7 +357,8 @@ export const VfxAudioShowcase: React.FC = () => {
           const hSheet = getGridSpriteSheet(heroInfo.src, 4, 2);
           const eSheet = getGridSpriteSheet(enemySrc, 4, 2);
           const koSheet = getGridSpriteSheet('/assets/grid_ko_fallen_4x2.jpg', 4, 2);
-          const drawChar = (sheet: ReturnType<typeof getGridSpriteSheet>, fIdx: number, x: number, flipX: number, flash: boolean) => {
+          // 피격 섬광은 실전과 같은 규칙: 처음 50ms만 새하얗게, 그 뒤 120ms 동안 옅게 걷힌다.
+          const drawChar = (sheet: ReturnType<typeof getGridSpriteSheet>, fIdx: number, x: number, flipX: number, flashLeft: number) => {
             if (!sheet || !sheet.frames[fIdx]) return;
             const sp = sheet.frames[fIdx];
             const scale = 148 / Math.max(1, sheet.refHeight);
@@ -349,13 +369,22 @@ export const VfxAudioShowcase: React.FC = () => {
             ctx.save();
             ctx.translate(x, GY);
             ctx.scale(flipX, 1);
-            ctx.drawImage(flash ? sp.flashCanvas : sp.canvas, -Math.round(sp.anchorX * scale), -dh, dw, dh);
+            if (flashLeft > 120) {
+              ctx.drawImage(sp.flashCanvas, -Math.round(sp.anchorX * scale), -dh, dw, dh);
+            } else {
+              ctx.drawImage(sp.canvas, -Math.round(sp.anchorX * scale), -dh, dw, dh);
+              if (flashLeft > 0) {
+                ctx.globalAlpha = 0.6 * Math.pow(flashLeft / 120, 1.4);
+                ctx.drawImage(sp.flashCanvas, -Math.round(sp.anchorX * scale), -dh, dw, dh);
+                ctx.globalAlpha = 1;
+              }
+            }
             ctx.restore();
           };
 
           const hIdx = now < s.heroActionUntil ? s.heroFrame : 0;
           const lunge = now < s.heroActionUntil ? 36 : 0;
-          drawChar(hSheet, hIdx, s.heroX + lunge, 1, false);
+          drawChar(hSheet, hIdx, s.heroX + lunge, 1, 0);
 
           if (now < s.enemyKoUntil && koSheet && koSheet.frames[7]) {
             const ksp = koSheet.frames[getKoFallenIndex({ isHero: false, enemySrc })];
@@ -367,8 +396,9 @@ export const VfxAudioShowcase: React.FC = () => {
             ctx.restore();
           } else {
             const eIdx = now < s.enemyHurtUntil ? s.enemyFrame : 0;
-            const knock = now < s.enemyHurtUntil ? 18 : 0;
-            drawChar(eSheet, eIdx, s.enemyX + knock, 1, now < s.enemyFlashUntil);
+            // 간파 시연에서는 상대가 밀려나지 않고 한 발 내디딘 채 칼을 맞댄다
+            const knock = now < s.enemyNoKnockUntil ? -46 : now < s.enemyHurtUntil ? 18 : 0;
+            drawChar(eSheet, eIdx, s.enemyX + knock, 1, s.enemyFlashUntil - now);
           }
 
           // ★ 60fps 크로스페이드 보간 32비트 픽셀아트 8프레임 VFX 렌더링! ★
@@ -384,6 +414,9 @@ export const VfxAudioShowcase: React.FC = () => {
               rotation: v.rotation,
             });
           });
+
+          // 패링 불꽃
+          s.deflects = s.deflects.filter((df) => renderDeflectSpark(ctx, df));
 
           // 보조 쇠불꽃 스파크
           s.particles.forEach((pt) => {
@@ -429,8 +462,29 @@ export const VfxAudioShowcase: React.FC = () => {
     return () => cancelAnimationFrame(rafId);
   }, [heroInfo.src]);
 
+  if (preview) {
+    return (
+      <div className="relative">
+        <button
+          onClick={() => setPreview(null)}
+          className="fixed top-2 right-2 z-[60] rpg-btn px-3 py-1.5 text-xs font-bold flex items-center gap-1 cursor-pointer"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" /> 테스트관으로
+        </button>
+        <AutoBattleView
+          key={preview.battle.id}
+          state={preview.state}
+          battle={preview.battle}
+          onChangeTactic={(t) => setPreview({ ...preview, state: { ...preview.state, battleTactic: t } })}
+          onFinish={() => setPreview(null)}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#120c08] text-[#f5ecd7] p-3 sm:p-6 flex flex-col items-center gap-4">
+    // body가 overflow-hidden(본 게임은 화면 고정)이라, 테스트관은 스스로 스크롤 영역이 되어야 아래 항목까지 내려갈 수 있다.
+    <div className="h-full overflow-y-auto bg-[#120c08] text-[#f5ecd7] p-3 sm:p-6 flex flex-col items-center gap-4">
       <div className="max-w-4xl w-full space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-[#8c6239] pb-3">
           <div className="flex items-center gap-2.5">
@@ -541,6 +595,24 @@ export const VfxAudioShowcase: React.FC = () => {
             <button onClick={triggerKoFinisher} className="seal-badge py-2.5 px-2 flex flex-col items-center gap-1 cursor-pointer">
               <Sparkles className="w-4 h-4" /><span>🏆 KO 피니시</span>
             </button>
+          </div>
+        </div>
+
+        <div className="rpg-window p-3.5 space-y-2.5">
+          <div className="text-xs font-bold text-[#fde68a] flex items-center gap-1.5">
+            <Play className="w-4 h-4" /> 실제 전투 화면으로 보기 (위에서 고른 국적·성별 적용)
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            {BATTLE_PREVIEW_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setPreview(buildBattlePreview(p, country, gender))}
+                className="rpg-btn py-2 px-2 flex flex-col items-center gap-0.5 cursor-pointer"
+              >
+                <span className="font-bold">{p.label}</span>
+                <span className="text-[10px] text-[#c7b394]">{p.desc}</span>
+              </button>
+            ))}
           </div>
         </div>
 
