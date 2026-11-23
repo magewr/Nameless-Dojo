@@ -20,6 +20,7 @@ import {
   BattleOutcomePayload,
   buildBattleConclusionNotice,
   createNewGame,
+  repairPhantomMagicRecord,
   executeScheduleActivity,
   FACILITY_INFO,
   getFacilityUpgradeCost,
@@ -240,7 +241,8 @@ export function App() {
       if (!loaded.graduatedDisciples) loaded.graduatedDisciples = [];
       if (!loaded.milestones) loaded.milestones = [];
       // 문파 관계·문하생 기질이 없던 시절의 세이브는 지금 난이도에 맞춰 채운다.
-      setState(ensureSectsAndTemperaments(loaded));
+      // 대회 관전에서 남이 쓴 술법이 내 기록으로 남았던 세이브도 여기서 바로잡는다.
+      setState(ensureSectsAndTemperaments(repairPhantomMagicRecord(loaded)));
       setCreating(false);
     }
   };

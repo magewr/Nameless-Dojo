@@ -1167,7 +1167,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       f.shoutIsCounter = isCounterRiposte;
 
       sound.playUnsheathe(panAt(f.x));
-      if (isP) {
+      // 객석 관전에서는 왼쪽 무사도 남이다. 그가 쓴 술법·금기를 내 기록으로 세지 않는다.
+      if (isP && !battle.spectatorMode) {
         if (sk.origin.includes('FANTASY')) metaRef.current.usedMagic = true;
         if (sk.isForbidden) {
           metaRef.current.usedForbidden = true;
@@ -1415,7 +1416,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           metaRef.current.parryFlashUntil = now + pause.freezeMs + pause.slowMs + 160;
           metaRef.current.shakeUntil = now + 150;
           metaRef.current.shakePower = Math.min(13, 5 + nextChain * 1.4);
-          if (!atkIsP) metaRef.current.justParries += 1;
+          if (!atkIsP && !battle.spectatorMode) metaRef.current.justParries += 1;
 
           deflectsRef.current.push(createDeflectSpark(clashX, 236, facing, nextChain));
 

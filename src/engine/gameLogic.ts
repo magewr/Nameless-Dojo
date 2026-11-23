@@ -3088,6 +3088,31 @@ export interface BattleOutcomePayload {
 }
 
 // 실시간 전투 종료 후 상태 정산
+const PHANTOM_MAGIC_EVENTS = ['fan_first_shock', 'fan_inquisition', 'fan_missionary', 'fan_royal_summon'];
+
+// 세이브 보정: 예전에는 대회 관전에서 비무대 위 무사가 쓴 술법이 내 기록으로 남았다.
+// 나도 문하생도 술법 초식을 하나도 익히지 않았는데 "사람들 앞에서 이적을 드러냈다"고 적혀 있으면 그 기록을 걷어낸다.
+export function repairPhantomMagicRecord(state: GameState): GameState {
+  const f = state.flags;
+  if (!f.usedMagicPublicly && !f.magicCastCount) return state;
+  // 이 기록이 정당하게 남는 길은 둘뿐이다: 술법(FANTASY) 초식을 실전에 썼거나, 빙결 초식으로 대화재를 얼렸거나.
+  const isArcane = (s: Skill) => s.origin.includes('FANTASY') || s.element === 'ICE';
+  const sideKnowsMagic = state.skills.some(isArcane) || state.disciples.some((d) => d.skills.some(isArcane));
+  if (sideKnowsMagic) return state;
+  return {
+    ...state,
+    flags: {
+      ...f,
+      usedMagicPublicly: false,
+      magicCastCount: 0,
+      // 잘못 열린 충격 이벤트는 나중에 진짜로 술법을 드러냈을 때 다시 일어날 수 있게 되돌린다.
+      triggeredEvents: f.triggeredEvents.filter((id) => !PHANTOM_MAGIC_EVENTS.includes(id)),
+    },
+    reputation: { ...state.reputation, arcane: Math.max(0, state.reputation.arcane - 12 * (f.magicCastCount || 0)) },
+    milestones: (state.milestones || []).filter((m) => m.key !== 'MAGIC_PUBLIC'),
+  };
+}
+
 export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePayload): GameState {
   const battle = state.pendingBattle;
   let after = applyBattleOutcomeCore(state, outcome);
@@ -3102,6 +3127,11 @@ export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePaylo
 function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload): GameState {
   const battle = state.pendingBattle;
   if (!battle) return { ...state, phase: 'MAIN' };
+
+  // 객석 관전은 남의 싸움이다. 비무대 위 무사가 쓴 술법·금기·간파는 내 기록에 남기지 않는다.
+  if (battle.spectatorMode) {
+    outcome = { ...outcome, usedMagic: false, usedForbidden: false, justParriesCount: 0, recoilHealthLoss: 0, recoilLifespanYears: 0 };
+  }
 
   let next: GameState = {
     ...state,
