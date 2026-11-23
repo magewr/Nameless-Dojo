@@ -20,7 +20,8 @@ import {
 } from '../src/data/booksAndSkills';
 import { MINOR_EVENTS } from '../src/data/minorEvents';
 import { generatePostMortemEnding } from '../src/data/worldAndEndings';
-import { BattleTactic, CountryId, DojoFacilities, ScheduleActivityId, Skill } from '../src/types/game';
+import { BattleTactic, CountryId, DifficultyId, DojoFacilities, ScheduleActivityId, Skill } from '../src/types/game';
+import { getFacilityUpgradeCost } from '../src/data/balanceRules';
 
 // Node 환경 localStorage mock
 const memStorage: Record<string, string> = {};
@@ -312,13 +313,202 @@ Array.from(endingCounts.entries())
 
 // 만물객 200회 샘플링
 let grimHits = 0;
-const sampleSt = createNewGame('JAPAN', 'MALE', '샘플', 30);
+const sampleSt = createNewGame('JAPAN', 'MALE', '샘플', 20);
 sampleSt.turn = 30;
 sampleSt.fame = 180;
 for (let i = 0; i < 200; i++) {
   if (generateMerchantOffer(sampleSt).hasGrimoire) grimHits++;
 }
 console.log(`  • 만물객 이계 금서 출현율: ${grimHits}/200 (${(grimHits / 2).toFixed(1)}%)`);
+
+// ------------------------------------------------------------------
+// TEST 4: 3단계 난이도 (EASY / HARD / HELL) × 60회 = 180회 생존·경제 정량 비교!
+// ------------------------------------------------------------------
+console.log('\n[TEST 4] 3단계 난이도(EASY / HARD / HELL) × 각 60회 = 180인생 밸런스 정량 분석');
+const diffs: DifficultyId[] = ['EASY', 'HARD', 'HELL'];
+for (const diff of diffs) {
+  const RUNS = 60;
+  let sumAge = 0;
+  let survive55 = 0;
+  let natural = 0;
+  let duelDeath = 0;
+  let escortDeath = 0;
+  let diseaseDisasterDeath = 0;
+  let sumMoney = 0;
+  let sumDebt = 0;
+  let sumFame = 0;
+  let sumDeadDiscs = 0;
+  let sumAliveDiscs = 0;
+  let sumRealDuels = 0;
+
+  for (let run = 0; run < RUNS; run++) {
+    const c = countries[run % 3];
+    let st = createNewGame(c, run % 2 === 0 ? 'MALE' : 'FEMALE', `테스터_${diff}_${run}`, 20, diff);
+    st.phase = 'MAIN';
+    st.sectName = '무명류';
+    st.sectNamed = true;
+    let safety = 0;
+    while (st.phase !== 'ENDING' && safety < 320) {
+      safety++;
+      if (st.activeEvent) {
+        const opts = st.activeEvent.options.filter((o) => !o.disabled);
+        let chosen = opts[0];
+        const hasRealDuelOpt = opts.some((o) => o.id.includes('_real') || o.id === 'real_ambush_fight' || o.id === 'demon_duel' || o.id === 'debt_duel');
+        const topLv = Math.max(...st.skills.map((s) => s.masteryLevel));
+        const weakNow = st.age < 38 || st.health < 58 || topLv < 7;
+        if (st.activeEvent.id.startsWith('realduel_assassin') && weakNow) {
+          chosen = opts.find((o) => o.id === 'real_ambush_bribe') || opts.find((o) => o.id === 'real_ambush_sacrifice') || opts[0];
+        } else if (st.activeEvent.id.startsWith('random_dojo_breaker') && hasRealDuelOpt && weakNow) {
+          chosen = opts.find((o) => o.id === 'breaker_ignore') || opts[0];
+        } else if (st.activeEvent.id.startsWith('grandmaster_visit')) {
+          chosen = opts.find((o) => o.id.endsWith('_spar')) || opts[opts.length - 1] || opts[0];
+        } else if (st.activeEvent.id.includes('demon') && weakNow) {
+          chosen = opts.find((o) => o.id === 'demon_swarm') || opts[opts.length - 1] || opts[0];
+        } else if (st.activeEvent.id === 'onboard_thug' || st.activeEvent.id.includes('debt')) {
+          chosen = opts.find((o) => o.id === 'debt_pay') || opts[0];
+        } else if (st.activeEvent.id.includes('rival_4')) {
+          chosen = opts.find((o) => o.id === 'rival_4_drink') || opts[0];
+        }
+        if (chosen) st = resolveEventOption(st, st.activeEvent, chosen.id);
+      }
+      if (st.phase === 'BATTLE' && st.pendingBattle) {
+        if (st.pendingBattle.isRealDuel) sumRealDuels++;
+        const tactic: BattleTactic = st.age >= 45 ? 'COUNTER' : 'BALANCED';
+        const out = simulateAutoBattleQuick(st, st.pendingBattle, 'HERO', tactic);
+        st = applyBattleOutcome(st, out);
+      }
+      if (st.phase === 'ENDING') break;
+
+      // 실제 플레이어처럼 보유 스킬 중 가장 강력한 액티브 4~5개를 자동 장착!
+      const topActives = [...st.skills].filter((s) => !s.isPassive).sort((a, b) => b.power * b.masteryLevel - a.power * a.masteryLevel).slice(0, 4).map((s) => s.id);
+      if (topActives.length > 0) st.equippedActiveIds = topActives;
+
+      if (st.pendingTraitSkillId) {
+        const sk = st.skills.find((s) => s.id === st.pendingTraitSkillId);
+        if (sk?.pendingTraitTier) {
+          const cands = getTraitCandidates(sk, sk.pendingTraitTier);
+          if (cands[0]) st = applyImprintedTrait(st, sk.id, cands[0]);
+        }
+      }
+
+      // 고수 플레이어 수준: 만물객 비급/무기 적극 구매 + 무술 조합(크래프팅) + 약방/연무장 증축!
+      if (st.debt > 0 && st.money >= 20) {
+        const pay = Math.min(st.debt, st.money);
+        st.money -= pay;
+        st.debt -= pay;
+      }
+      if (st.merchantOffer) {
+        const bestW = st.merchantOffer.weapons.find((w) => w.attack > (st.weapons.find((ow) => ow.id === st.equippedWeaponId)?.attack || 0) + 4 && st.money >= w.price + 80);
+        if (bestW && !st.weapons.some((ow) => ow.id === bestW.id)) {
+          st.money -= bestW.price;
+          st.weapons = [...st.weapons, { ...bestW }];
+          st.equippedWeaponId = bestW.id;
+        }
+        const bk = st.merchantOffer.books.find((b) => !st.books.some((ob) => ob.id === b.id) && b.rarity !== 'GRIMOIRE' && st.money >= b.price + 60);
+        if (bk && st.skills.length < 8) {
+          st.money -= bk.price;
+          if (bk.decodeApRequired === 0) {
+            const tpl = BOOK_SKILL_TEMPLATES[bk.skillTemplateId];
+            st.books = [...st.books, { ...bk, decoded: true }];
+            if (tpl && !st.skills.some((s) => s.id === tpl.id)) {
+              st.skills = [...st.skills, { ...tpl, masteryLevel: 1, masteryExp: 0, imprintedTraits: [] }];
+            }
+          } else {
+            st.books = [...st.books, { ...bk }];
+          }
+        }
+      }
+      // 고수 플레이어처럼 반격기/시그니처 조합 적극 진행!
+      if (!st.activeCraft && st.skills.length >= 2 && st.skills.length < 10) {
+        for (let i = 0; i < st.skills.length && !st.activeCraft; i++) {
+          for (let j = i + 1; j < st.skills.length && !st.activeCraft; j++) {
+            const ev = evaluateCraft(st.skills[i], st.skills[j], st.stats.ins, st.name);
+            if (ev.possible && ev.isSignature && ev.resultSkill && !st.skills.some((x) => x.id === ev.resultSkill!.id)) {
+              st.activeCraft = { skillAId: st.skills[i].id, skillBId: st.skills[j].id, customName: ev.resultSkill.name, progress: 0 };
+            }
+          }
+        }
+      }
+      // 장착 무기 +1~+4 강화
+      const eqW = st.weapons.find((w) => w.id === st.equippedWeaponId);
+      if (eqW && eqW.upgradeLevel < Math.min(4, st.facilities.forge + 1)) {
+        const upCost = Math.round((60 + eqW.upgradeLevel * 90 + eqW.upgradeLevel * eqW.upgradeLevel * 55) * (diff === 'HELL' ? 1.42 : diff === 'HARD' ? 1.22 : 1));
+        if (st.money >= upCost + 110) {
+          st.money -= upCost;
+          st.weapons = st.weapons.map((w) => (w.id === eqW.id ? { ...w, upgradeLevel: w.upgradeLevel + 1 } : w));
+        }
+      }
+      const facKeys: (keyof DojoFacilities)[] = ['clinic', 'yard', 'dorm', 'forge'];
+      for (const fk of facKeys) {
+        const lv = st.facilities[fk];
+        if (lv < 4) {
+          const cost = getFacilityUpgradeCost(FACILITY_INFO[fk].costs[lv], st);
+          if (st.money >= cost + 100) {
+            st.money -= cost;
+            st.facilities = { ...st.facilities, [fk]: lv + 1 };
+            break;
+          }
+        }
+      }
+
+      // 제자 역할 배치 (호위 파견 일부 포함!)
+      const aliveD = st.disciples.filter((d) => !d.dead);
+      if (aliveD.length >= 2) {
+        st.disciples = st.disciples.map((d, idx) =>
+          d.dead ? d : { ...d, role: idx % 3 === 0 ? 'ESCORT' : 'STUDENT' }
+        );
+      }
+
+      // 생존 중심 정상 플레이어 스케줄 (연구·조합·수련·휴식·호위 균형!)
+      const unread = st.books.find((b) => !b.decoded && (!b.requiresMasteryLv || Math.max(...st.skills.map((s) => s.masteryLevel)) >= b.requiresMasteryLv) && (!b.requiresQi || st.stats.qi >= b.requiresQi));
+      if (unread) st.seasonPlan.decodeBookId = unread.id;
+      const trainSk = [...st.skills].filter((s) => s.masteryLevel < 10).sort((a, b) => b.power - a.power)[0] || st.skills[0];
+      st.seasonPlan.trainSkillId = trainSk.id;
+      let acts: ScheduleActivityId[] = [];
+      if (st.health < 58 || st.statuses.length > 0) {
+        acts = ['REST'];
+      } else if (st.activeCraft) {
+        acts = ['TRAIN', 'CRAFT'];
+      } else if (unread) {
+        acts = ['TRAIN', 'DECODE'];
+      } else if (st.money < 130 || st.debt > 0) {
+        acts = ['TRAIN', 'ESCORT'];
+      } else {
+        acts = ['TRAIN', st.age >= 42 ? 'MIND' : 'BODY'];
+      }
+      const share = 1 / acts.length;
+      for (let i = 0; i < acts.length; i++) {
+        if (st.phase === 'ENDING') break;
+        const ph = i === 0 ? 'EARLY' : i === acts.length - 1 ? 'LATE' : 'MID';
+        st = executeScheduleActivity(st, acts[i], share, ph).state;
+      }
+      if (st.phase === 'ENDING') break;
+      st = advanceSeason(st);
+    }
+
+    sumAge += st.age;
+    if (st.age >= 55) survive55++;
+    const cause = st.deathCause || '';
+    if (cause.includes('천수')) natural++;
+    else if (cause.includes('진검')) duelDeath++;
+    else if (cause.includes('호위')) escortDeath++;
+    else if (cause.includes('열병') || cause.includes('병사') || cause.includes('천재지변') || cause.includes('역병')) diseaseDisasterDeath++;
+    sumMoney += st.money;
+    sumDebt += st.debt;
+    sumFame += st.fame;
+    sumAliveDiscs += st.disciples.filter((d) => !d.dead).length;
+    sumDeadDiscs += st.disciples.filter((d) => d.dead).length;
+  }
+
+  console.log(
+    `  [${diff.padEnd(4)}] 평균수명 ${(sumAge / RUNS).toFixed(1)}세 | 55세+ 생존 ${Math.round((survive55 / RUNS) * 100)}% · 천수 ${Math.round((natural / RUNS) * 100)}% | ` +
+      `사망원인(진검 ${Math.round((duelDeath / RUNS) * 100)}% / 호위 ${Math.round((escortDeath / RUNS) * 100)}% / 병·재해 ${Math.round((diseaseDisasterDeath / RUNS) * 100)}%)`
+  );
+  console.log(
+    `         ↳ 잔고 ${Math.round(sumMoney / RUNS)} (빚 ${Math.round(sumDebt / RUNS)}) | 명성 ${Math.round(sumFame / RUNS)} | ` +
+      `생존제자 ${(sumAliveDiscs / RUNS).toFixed(1)}명 · 사망제자 ${(sumDeadDiscs / RUNS).toFixed(1)}명 | 진검결투 평균 ${(sumRealDuels / RUNS).toFixed(1)}회`
+  );
+}
 
 console.log('\n==================================================================');
 console.log(`  분석 완료 | 치명 오류(FAIL): ${failures.length}건 | 밸런스 경고(WARN): ${warnings.length}건`);

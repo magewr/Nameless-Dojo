@@ -4,6 +4,29 @@ import { ACHIEVEMENTS, UnlockedAchievement } from '../data/achievements';
 const SAVE_KEY = 'nameless_dojo_autosave_v1';
 const LEGACY_KEY = 'nameless_dojo_legacy_v1';
 const ACH_KEY = 'nameless_dojo_achievements_v1';
+const CLEARED_KEY = 'nameless_dojo_cleared_v1';
+
+export function markGameCleared(): void {
+  try {
+    localStorage.setItem(CLEARED_KEY, '1');
+  } catch {
+    // ignore
+  }
+}
+
+// 한 번이라도 일생 완주(천수/55세+ 생존/대회 우승 엔딩 또는 클리어 기록 보유) 시 지옥 난이도 해금!
+export function hasUnlockedHellDifficulty(): boolean {
+  try {
+    if (localStorage.getItem(CLEARED_KEY) === '1') return true;
+    const legacies = loadLegacyRecords();
+    if (legacies.some((r) => r.deathAge >= 55 || (r.deathCause || '').includes('천수'))) return true;
+    const achs = loadUnlockedAchievements();
+    if (achs.some((a) => a.id === 'ach_longevity' || a.id === 'ach_tournament_win' || a.id === 'ach_fame_1000')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 export function saveGameState(state: GameState): void {
   try {

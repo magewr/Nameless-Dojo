@@ -3,6 +3,7 @@ import {
   BattleConfig,
   Book,
   CountryId,
+  DifficultyId,
   Disciple,
   DojoFacilities,
   GameState,
@@ -21,17 +22,22 @@ import { pickMinorEvent } from '../data/minorEvents';
 import {
   getDiscipleIllnessMeta,
   getDojoInvestmentCosts,
+  getFacilityUpgradeCost,
   getFeverMedicineMeta,
   getHerbPeddlerMeta,
   getPlagueMedicineMeta,
+  getShopPrice,
   getWeaponUpgradeCost,
 } from '../data/balanceRules';
+import { getDifficultyConfig, getDifficultyId } from '../data/difficulty';
 export {
   getDiscipleIllnessMeta,
   getDojoInvestmentCosts,
+  getFacilityUpgradeCost,
   getFeverMedicineMeta,
   getHerbPeddlerMeta,
   getPlagueMedicineMeta,
+  getShopPrice,
   getWeaponUpgradeCost,
 };
 import {
@@ -67,9 +73,11 @@ export function createNewGame(
   country: CountryId,
   gender: Gender,
   name: string,
-  startAge: 15 | 20 | 28
+  startAge: 15 | 20 | 28,
+  difficulty: DifficultyId = 'EASY'
 ): GameState {
   const cMeta = COUNTRIES[country];
+  const diffCfg = getDifficultyConfig({ difficulty });
   const startingWeapons = getStartingWeapons(country);
   const baseSkills = createBaseSkills();
 
@@ -82,6 +90,7 @@ export function createNewGame(
 
   const initial: GameState = {
     phase: 'PROLOGUE',
+    difficulty,
     country,
     gender,
     name: name.trim() || '이도현',
@@ -97,7 +106,7 @@ export function createNewGame(
     ap: 2,
     maxAp: 2,
     money: ageBonus.money,
-    debt: 20,
+    debt: diffCfg.startDebt,
     debtTurns: 0,
     fame: 10,
     authority: 10,
@@ -673,7 +682,7 @@ export function generateMerchantOffer(state: GameState): MerchantOffer {
   const chosenBooks: Book[] = [];
   const toBook = (b: Omit<Book, 'decodeProgress' | 'decoded'>): Book => ({
     ...b,
-    price: Math.round(b.price * discount),
+    price: getShopPrice(Math.round(b.price * discount), state),
     decodeProgress: 0,
     decoded: false,
   });
@@ -827,7 +836,8 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
     merchantOffer: null,
   };
 
-  // 1. 경제 정산 (월사금 체감 곡선 + 누진 시설·문하생 유지비 + 관아 호세/문파세로 후반 인플레이션 억제!)
+  // 1. 경제 정산 (난이도별 수입↓ · 지출↑ · 이자율↑ 반영!)
+  const diffCfg = getDifficultyConfig(next);
   const aliveDisciples = next.disciples.filter((d) => !d.dead);
   const fameMult = 1 + Math.min(1.65, Math.sqrt(Math.max(0, next.fame)) * 0.062);
   const stolenPenalty = next.signboardStolen ? 0.4 : 1.0;
@@ -839,16 +849,17 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
     const scaleFactor = idx < 8 ? 1.0 : idx < 16 ? 0.75 : 0.55;
     return acc + d.tuition * fameMult * scaleFactor;
   }, 0);
-  const tuitionIncome = Math.round(rawTuitionSum * stolenPenalty * countryMoneyBonus * spouseCommerce);
+  const tuitionIncome = Math.round(rawTuitionSum * stolenPenalty * countryMoneyBonus * spouseCommerce * diffCfg.incomeMult);
   const escortIncome = Math.round(
     aliveDisciples.filter((d) => d.role === 'ESCORT').length *
       (18 + Math.min(28, Math.sqrt(Math.max(0, next.fame)) * 1.1)) *
-      spouseCommerce
+      spouseCommerce *
+      diffCfg.incomeMult
   );
-  const royalBonus = next.flags.royalAlliance ? 75 : 0;
+  const royalBonus = next.flags.royalAlliance ? Math.round(75 * diffCfg.incomeMult) : 0;
   const grossIncome = tuitionIncome + escortIncome + royalBonus;
 
-  // 시설 단계별 누진 유지비 (Lv.1 무료 / Lv.2 12 / Lv.3 30 / Lv.4 대형시설 62)
+  // 시설 단계별 누진 유지비 (Lv.1 무료 / Lv.2 12 / Lv.3 30 / Lv.4 대형시설 62) × 난이도 지출 배수
   const facUpkeepTable = [0, 0, 12, 30, 62];
   const facilityUpkeep =
     (facUpkeepTable[next.facilities.yard] || 0) +
@@ -864,14 +875,15 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
   const instructorCountUpkeep = aliveDisciples.filter((d) => d.role === 'INSTRUCTOR').length;
   const upkeep = Math.round(
     (facilityUpkeep + baseDiscCount * 7 + extraDiscCount * 10 + instructorCountUpkeep * 16) *
-      (next.facilities.dorm >= 4 ? 0.88 : 1.0)
+      (next.facilities.dorm >= 4 ? 0.88 : 1.0) *
+      diffCfg.expenseMult
   );
 
   // 관아 호세·문파세 (초반 비과세 · 중후반 대도장 누진 과세 — 조정 후원 시 35% 감면)
   const taxableIncome = Math.max(0, grossIncome - 160);
   const baseTaxRate = next.fame >= 1200 ? 0.18 : next.fame >= 500 ? 0.12 : next.fame >= 180 ? 0.06 : 0;
   const taxRelief = next.flags.royalAlliance ? 0.65 : 1.0;
-  const seasonalTax = Math.round(taxableIncome * baseTaxRate * taxRelief);
+  const seasonalTax = Math.round(taxableIncome * baseTaxRate * taxRelief * diffCfg.expenseMult);
 
   // 연말(겨울→봄) 거대 문파 보유 자산 공양·관아 헌납 (보유금 4,500냥 초과분의 10% → 무한 적체 방지)
   const wealthContribution = isNewYear && next.money > 4500 ? Math.round((next.money - 4500) * 0.1) : 0;
@@ -895,10 +907,34 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
   if (next.debt > 0) {
     next.debtTurns += 1;
     if (isNewYear) {
-      next.debt = Math.round(next.debt * 1.2);
+      next.debt = Math.round(next.debt * (1 + diffCfg.debtInterestRate));
     }
   } else {
     next.debtTurns = 0;
+  }
+
+  // ★ [어려움 / 지옥] 호위(ESCORT) 파견 문하생의 산적 습격 부상/전사 판정! ★
+  if (diffCfg.escortPassiveDeathRate > 0) {
+    const escortTargets = next.disciples.filter((d) => !d.dead && d.role === 'ESCORT');
+    for (const ed of escortTargets) {
+      const powerGuard = Math.min(0.45, (ed.stats.str + ed.stats.vit) * 0.004);
+      const deathProb = diffCfg.escortPassiveDeathRate * (1 - powerGuard);
+      const injuryProb = deathProb * 1.6;
+      const roll = Math.random();
+      if (roll < deathProb) {
+        next.disciples = next.disciples.map((d) =>
+          d.id === ed.id ? { ...d, dead: true, leftReason: '호위 파견 중 산적 습격으로 전사' } : d
+        );
+        next = addLog(next, `☠ 비보! 호위 파견 중이던 문하생 ${ed.name}이(가) 산적 떼의 습격을 막다 끝내 전사했다…`, 'DANGER');
+      } else if (roll < deathProb + injuryProb) {
+        next.disciples = next.disciples.map((d) =>
+          d.id === ed.id
+            ? { ...d, loyalty: Math.max(20, d.loyalty - 6), stats: { ...d.stats, vit: Math.max(10, d.stats.vit - 2) } }
+            : d
+        );
+        next = addLog(next, `⚠ 호위 파견 중이던 문하생 ${ed.name}이(가) 마적과 교전하다 큰 부상을 입고 돌아왔다. (체력 -2)`, 'WARN');
+      }
+    }
   }
 
   // 2. 노화 스탯 커브 및 건강/수명 정산
@@ -946,6 +982,7 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
   }, 0);
   healthDelta += passiveHealthBonus;
   if (healthDelta < 0) {
+    healthDelta = Math.round(healthDelta * diffCfg.agingWearMult);
     if (hasLongevity) healthDelta = Math.round(healthDelta * 0.65);
     if (next.facilities.clinic >= 4) healthDelta = Math.round(healthDelta * 0.7);
     if (next.spouse?.alive && next.spouse.bonusType === 'CLINIC') healthDelta = Math.round(healthDelta * 0.8);
@@ -1081,7 +1118,8 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     .replace(/^disciple_passing_.*/, 'disciple_passing')
     .replace(/^hero_fever_.*/, 'hero_fever');
   const prevRecent = state.flags.recentEventBases || [];
-  const nextRecent = [baseKey, ...prevRecent.filter((k) => k !== baseKey)].slice(0, 6);
+  const coolLimit = getDifficultyId(state) === 'HELL' ? 2 : getDifficultyId(state) === 'HARD' ? 3 : 6;
+  const nextRecent = [baseKey, ...prevRecent.filter((k) => k !== baseKey)].slice(0, coolLimit);
 
   let next: GameState = {
     ...state,
@@ -1089,9 +1127,79 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent },
   };
   const cMeta = COUNTRIES[state.country];
-  const scale = Math.min(4.5, 0.7 + state.turn * 0.032 + state.fame * 0.004);
+  const diffCfg = getDifficultyConfig(state);
+  const diffId = getDifficultyId(state);
+  // 제곱근 완만 성장 곡선 + 난이도별 명확한 전투 강도 격차!
+  const baseScale = Math.min(3.15, 0.72 + Math.sqrt(Math.max(1, state.turn)) * 0.165 + Math.sqrt(Math.max(0, state.fame)) * 0.028);
+  const scale = Math.min(4.2, baseScale * diffCfg.enemyScaleMult);
 
   switch (optionId) {
+    // ★ [어려움 / 지옥] 신규 자연재해 · 진검 암습 · 진검 도장깨기 처리! ★
+    case 'disaster_pay': {
+      const repairCost = Number(event.meta?.repairCost || 150);
+      next.money = Math.max(0, next.money - repairCost);
+      next.reputation = { ...next.reputation, virtue: next.reputation.virtue + 16 };
+      return addLog(next, `사재 ${repairCost}${cMeta.currency}을(를) 털어 천재지변 피해를 신속히 수습하고 식솔들을 지켰다! (인덕 +16)`, 'GOOD');
+    }
+    case 'disaster_endure': {
+      const hLoss = diffId === 'HELL' ? 28 : 18;
+      next.health = Math.max(0, next.health - hLoss);
+      next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '재해 후유증', turnsRemaining: 2 }];
+      // 시설 손상 또는 문하생 부상/전사 위험!
+      const aliveD = next.disciples.filter((d) => !d.dead && !d.isChild);
+      if (aliveD.length > 0 && Math.random() < (diffId === 'HELL' ? 0.45 : 0.25)) {
+        const vic = aliveD[Math.floor(Math.random() * aliveD.length)];
+        if (Math.random() < (diffId === 'HELL' ? 0.55 : 0.35)) {
+          next.disciples = next.disciples.map((d) => (d.id === vic.id ? { ...d, dead: true, leftReason: '천재지변으로 희생' } : d));
+          next = addLog(next, `☠ 비극! 천재지변 속에서 문하생 ${vic.name}이(가) 무너진 담장에 깔려 끝내 숨졌다…`, 'DANGER');
+        } else {
+          next.disciples = next.disciples.map((d) =>
+            d.id === vic.id ? { ...d, loyalty: Math.max(15, d.loyalty - 12), stats: { ...d.stats, vit: Math.max(10, d.stats.vit - 2) } } : d
+          );
+          next = addLog(next, `⚠ 재해 수습 도중 문하생 ${vic.name}이(가) 큰 부상을 입었다.`, 'WARN');
+        }
+      }
+      if (next.health <= 0) {
+        next.phase = 'ENDING';
+        next.deathCause = '천재지변(재난·기근)';
+        return addLog(next, '거센 천재지변과 기근을 견디지 못하고 끝내 쓰러졌다…', 'DANGER');
+      }
+      return addLog(next, `천재지변을 맨몸으로 버텨 냈으나 심신이 크게 상했다. (건강 -${hLoss})`, 'DANGER');
+    }
+    case 'real_ambush_fight': {
+      next.pendingBattle = createBattleConfig(
+        `b_ambush_${state.turn}`, '살수단 두목 — 진검 야습', '⚠ 패배 시 사망/영구장애', true,
+        '피의 살수 두목', '암살단 두목', 34, 'RUSHDOWN', Math.max(1.1, scale * 1.04), 'BLADE',
+        ['sk_jp_03', 'sk_jp_06', 'sk_cn_07'],
+        { rewardMoney: Math.round(75 + scale * 32), rewardFame: 55 }
+      );
+      next.phase = 'BATTLE';
+      return next;
+    }
+    case 'real_ambush_sacrifice': {
+      const aliveD = next.disciples.filter((d) => !d.dead && !d.isChild);
+      next.fame = Math.max(0, next.fame - 15);
+      if (aliveD.length > 0) {
+        const vic = aliveD[Math.floor(Math.random() * aliveD.length)];
+        if (Math.random() < (diffId === 'HELL' ? 0.65 : 0.42)) {
+          next.disciples = next.disciples.map((d) => (d.id === vic.id ? { ...d, dead: true, leftReason: '살수단 야습을 막다 전사' } : d));
+          return addLog(next, `☠ 문하생들과 포위해 살수단을 몰아냈으나, 앞장섰던 ${vic.name}이(가) 진검에 베여 끝내 전사했다…`, 'DANGER');
+        }
+        next.disciples = next.disciples.map((d) =>
+          d.id === vic.id ? { ...d, stats: { ...d.stats, vit: Math.max(10, d.stats.vit - 3) } } : d
+        );
+        return addLog(next, `살수단을 몰아냈으나 문하생 ${vic.name}이(가) 깊은 자상을 입었다. (제자 체력 -3)`, 'WARN');
+      }
+      return addLog(next, '간신히 살수단의 포위를 뚫고 물러났다. (명성 -15)', 'WARN');
+    }
+    case 'real_ambush_bribe': {
+      const bribeCost = Number(event.meta?.bribeCost || 150);
+      next.money = Math.max(0, next.money - bribeCost);
+      next.fame = Math.max(0, next.fame - 22);
+      next.authority = Math.max(0, next.authority - 10);
+      return addLog(next, `살수단에게 ${bribeCost}${cMeta.currency}을(를) 건네고 목숨을 지켰다. 치욕스러우나 살아남았다. (명성 -22)`, 'WARN');
+    }
+
     // ★ 문하생 독립(하산) & 독립 제자 재방문 & 질병/사망 & 신규 서사 이벤트 선택지 처리! ★
     case 'grad_let_go':
     case 'grad_gift_farewell':
@@ -1239,14 +1347,15 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
         next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '겨울 열병 후유증', turnsRemaining: 2 }];
         return addLog(next, `비싼 탕약(-${cost}${cMeta.currency})을 달여 마셨으나 열기가 쉽게 꺾이지 않았다… (건강 -10 · 후유증)`, 'WARN');
       }
-      next.health = Math.max(0, next.health - 18);
+      const severeLoss = diffId === 'HELL' ? 30 : diffId === 'HARD' ? 22 : 18;
+      next.health = Math.max(0, next.health - severeLoss);
       next.statuses = [...next.statuses, { id: 'PLAGUE', label: '열병 악화', turnsRemaining: 2 }];
       if (next.health <= 0) {
         next.deathCause = '열병(탕약이 듣지 않음)';
         next.phase = 'ENDING';
         return addLog(next, `탕약이 되레 속열과 충돌해 고열이 치솟았다… 끝내 열병을 이기지 못하고 눈을 감았다.`, 'DANGER');
       }
-      return addLog(next, `탕약이 되레 속열과 부딪쳐 고열이 악화되었다! (건강 -18 · 열병 악화)`, 'DANGER');
+      return addLog(next, `탕약이 되레 속열과 부딪쳐 고열이 악화되었다! (건강 -${severeLoss} · 열병 악화)`, 'DANGER');
     }
     case 'fever_endure': {
       const loss = next.age >= 55 ? 20 : 15;
@@ -1970,9 +2079,23 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
         next.stats = { ...next.stats, vit: next.stats.vit + 3 };
         return addLog(next, '단련된 체력과 도장 약방으로 지독한 역병을 기적적으로 이겨 냈다! (체력 +3)', 'GOOD');
       }
-      next.health = Math.max(5, next.health - 20);
+      const plagueLoss = diffId === 'HELL' ? 34 : diffId === 'HARD' ? 26 : 20;
+      next.health = Math.max(0, next.health - plagueLoss);
       next.statuses = [...next.statuses, { id: 'PLAGUE', label: '역병 후유증', turnsRemaining: 2 }];
-      return addLog(next, '역병에 크게 앓아누웠다. 건강이 심각하게 상했다. (건강 -20)', 'DANGER');
+      if (diffId !== 'EASY') {
+        const aliveTargets = next.disciples.filter((d) => !d.dead && !d.isChild);
+        if (aliveTargets.length > 0 && Math.random() < (diffId === 'HELL' ? 0.6 : 0.35)) {
+          const victim = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+          next.disciples = next.disciples.map((d) => (d.id === victim.id ? { ...d, dead: true, leftReason: '대역병으로 병사' } : d));
+          next = addLog(next, `☠ 대역병 속에서 문하생 ${victim.name}이(가) 끝내 목숨을 잃었다…`, 'DANGER');
+        }
+      }
+      if (next.health <= 0) {
+        next.phase = 'ENDING';
+        next.deathCause = '대역병(병사)';
+        return addLog(next, '지독한 역병을 끝내 이겨 내지 못하고 눈을 감았다…', 'DANGER');
+      }
+      return addLog(next, `역병에 크게 앓아누웠다. 건강이 심각하게 상했다. (건강 -${plagueLoss})`, 'DANGER');
     }
 
     case 'orphan_accept': {
@@ -2023,15 +2146,23 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       return addLog(next, '노인과 차를 나누며 무도의 깊은 이치를 깨우쳤다.', 'GOOD');
 
     case 'breaker_fight':
+    case 'breaker_fight_real': {
+      const isReal = optionId === 'breaker_fight_real';
       next.pendingBattle = createBattleConfig(
-        `b_breaker_${state.turn}`, '도장깨기 비무', '현판을 건 자존심 대결', false,
-        '타 문파 도전자', '도장깨기 무사', 25 + Math.floor(Math.random() * 18),
+        `b_breaker_${state.turn}`,
+        isReal ? '진검 도장깨기 결투' : '도장깨기 비무',
+        isReal ? '⚠ 패배 시 사망/영구장애' : '현판을 건 자존심 대결',
+        isReal,
+        isReal ? '살기 띤 도장깨기 검객' : '타 문파 도전자',
+        isReal ? '진검 도전자' : '도장깨기 무사',
+        25 + Math.floor(Math.random() * 18),
         (['AGGRESSIVE', 'DUELIST', 'HEAVY', 'RUSHDOWN'] as const)[Math.floor(Math.random() * 4)],
         scale, 'BLADE', ['sk_kr_01', 'sk_cn_01', 'sk_jp_03'],
-        { rewardMoney: Math.round(35 + scale * 25), rewardFame: Math.round(20 + scale * 12) }
+        { rewardMoney: Math.round((isReal ? 55 : 35) + scale * 25), rewardFame: Math.round((isReal ? 38 : 20) + scale * 12) }
       );
       next.phase = 'BATTLE';
       return next;
+    }
     case 'breaker_ignore':
       next.fame = Math.max(0, next.fame - 8);
       next.reputation = { ...next.reputation, ascetic: next.reputation.ascetic + 5 };
@@ -2703,13 +2834,66 @@ export function executeScheduleActivity(
     }
   } else if (activity === 'ESCORT') {
     location = 'GATE';
-    // 문하생 합동 호위 보너스 (상한 2.3배로 현실화하여 후반 금전 폭발 방지)
+    const diffCfg = getDifficultyConfig(next);
+    // 문하생 합동 호위 보너스 × 난이도 수입 배수
     const escortRoles = aliveDisciples.filter((d) => d.role === 'ESCORT').length;
     const discipleMoneyMult = 1 + Math.min(1.3, aliveCount * 0.09 + escortRoles * 0.09);
-    const pay = Math.max(10, Math.round((40 + Math.min(45, next.stats.str * 0.55) + (next.country === 'CHINA' ? 8 : 0)) * discipleMoneyMult * eff));
+    const pay = Math.max(
+      8,
+      Math.round((40 + Math.min(45, next.stats.str * 0.55) + (next.country === 'CHINA' ? 8 : 0)) * discipleMoneyMult * eff * diffCfg.incomeMult)
+    );
     next.money += pay;
     next.reputation.commerce += Math.max(2, Math.round(7 * eff));
     if (Math.random() < eff) next.stats.vit += 1;
+
+    // ★ [어려움 / 지옥] 호위 중 산적·마적 습격 → 주인공 & 동행 문하생 중상/전사 위험! ★
+    let escortDangerLog: string | null = null;
+    if (diffCfg.escortHeroHazardRate > 0) {
+      const combatProtect = Math.min(0.45, (next.stats.str + next.stats.agi + next.stats.ins) * 0.0022);
+      const heroHazardProb = diffCfg.escortHeroHazardRate * eff * (1 - combatProtect);
+      if (Math.random() < heroHazardProb) {
+        const isLethalAmbush = Math.random() < diffCfg.escortHeroDeathChance;
+        const dmg = isLethalAmbush
+          ? (diffCfg.id === 'HELL' ? 46 : 36)
+          : (diffCfg.id === 'HELL' ? 18 : 13) + Math.floor(Math.random() * 8);
+        next.health = Math.max(0, next.health - dmg);
+        next.statuses = [...next.statuses, { id: isLethalAmbush ? 'HEAVY_INJURY' : 'LIGHT_INJURY', label: '호위 중 산적 자상', turnsRemaining: 2 }];
+        if (next.health <= 0 || (isLethalAmbush && Math.random() < (diffCfg.id === 'HELL' ? 0.35 : 0.16))) {
+          next.phase = 'ENDING';
+          next.health = 0;
+          next.deathCause = '호위 임무 중 전사';
+          escortDangerLog = `☠ 호위 도중 매복한 마적 떼의 독화살과 기습을 맞고 끝내 전사했다…`;
+          next = addLog(next, escortDangerLog, 'DANGER');
+        } else {
+          escortDangerLog = isLethalAmbush
+            ? `⚠ 호위 중 마적 두목의 기습에 치명적인 중상을 입었다! (건강 -${dmg})`
+            : `⚠ 호위 중 산적 떼의 습격을 받아 큰 부상을 입었다! (건강 -${dmg})`;
+          next = addLog(next, escortDangerLog, 'DANGER');
+        }
+      }
+      // 동행 문하생 중상/전사 판정
+      const escortCandidates = next.disciples.filter((d) => !d.dead && !d.isChild);
+      if (escortCandidates.length > 0 && Math.random() < diffCfg.escortDiscipleCasualtyRate * eff) {
+        const victim = escortCandidates[Math.floor(Math.random() * escortCandidates.length)];
+        const discPower = Math.min(0.4, (victim.stats.str + victim.stats.vit) * 0.0035);
+        if (Math.random() < 0.45 * (1 - discPower)) {
+          next.disciples = next.disciples.map((d) =>
+            d.id === victim.id ? { ...d, dead: true, leftReason: '호위 임무 중 산적 습격으로 전사' } : d
+          );
+          const dMsg = `☠ 비보! 합동 호위에 나섰던 문하생 ${victim.name}이(가) 산적의 칼에 맞아 전사했다…`;
+          next = addLog(next, dMsg, 'DANGER');
+          feedLines.push({ text: `[${phaseLabel}] ${dMsg}`, tone: 'WARN' });
+        } else {
+          next.disciples = next.disciples.map((d) =>
+            d.id === victim.id ? { ...d, stats: { ...d.stats, vit: Math.max(10, d.stats.vit - 2) } } : d
+          );
+          const dMsg = `⚠ 합동 호위 중 문하생 ${victim.name}이(가) 산적과 교전하다 중상을 입었다. (체력 -2)`;
+          next = addLog(next, dMsg, 'WARN');
+          feedLines.push({ text: `[${phaseLabel}] ${dMsg}`, tone: 'WARN' });
+        }
+      }
+    }
+
     if (aliveCount > 0) {
       next.disciples = next.disciples.map((d) =>
         d.dead
@@ -2722,11 +2906,13 @@ export function executeScheduleActivity(
       );
       discipleBadgeText = `문하생 ${aliveCount}명 합동 호위 (+${Math.round((discipleMoneyMult - 1) * 100)}%)`;
     }
-    floatingText = `+${pay}${cMeta.currency}`;
-    floatingColor = '#fbbf24';
+    floatingText = escortDangerLog ? '⚠ 호위 습격!' : `+${pay}${cMeta.currency}`;
+    floatingColor = escortDangerLog ? '#f43f5e' : '#fbbf24';
     feedLines.push({
-      text: `[${phaseLabel}] 호위 · 생계 의뢰 수행 (+${pay}${cMeta.currency}${aliveCount > 0 ? ` · 문하생 ${aliveCount}명 합동` : ''})`,
-      tone: 'GOOD',
+      text: escortDangerLog
+        ? `[${phaseLabel}] ${escortDangerLog} (+${pay}${cMeta.currency})`
+        : `[${phaseLabel}] 호위 · 생계 의뢰 수행 (+${pay}${cMeta.currency}${aliveCount > 0 ? ` · 문하생 ${aliveCount}명 합동` : ''})`,
+      tone: escortDangerLog ? 'WARN' : 'GOOD',
     });
   } else if (activity === 'REST') {
     location = 'CLINIC';
@@ -2992,13 +3178,14 @@ export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePaylo
     }
   }
 
-  // ★ 결투 결과 HP 소모 → 건강(Health) 연동! (승패 무관하게 많이 맞고 끝나면 건강이 깎여 휴식을 자연 유도!) ★
+  const diffCfg = getDifficultyConfig(next);
+  // ★ 결투 결과 HP 소모 → 건강(Health) 연동! (난이도가 높을수록 실전 부상 마모 가중!) ★
   const lostRatio = Math.max(0, Math.min(1, 1 - (outcome.hpRemainingRatio ?? 1)));
   const applyBattleWear = (st: GameState): GameState => {
-    if (lostRatio < 0.08) return st; // 무피격·경미한 스침은 건강 손실 없음!
-    const maxWear = battle.isRealDuel ? 32 : battle.isTournament ? 20 : 24;
+    if (lostRatio < 0.08) return st;
+    const maxWear = (battle.isRealDuel ? 32 : battle.isTournament ? 20 : 24) * diffCfg.battleWearMult;
     const wear = Math.max(2, Math.round(lostRatio * maxWear));
-    const nextHealth = Math.max(5, st.health - wear);
+    const nextHealth = Math.max(4, st.health - wear);
     return { ...st, health: nextHealth };
   };
 
@@ -3006,20 +3193,30 @@ export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePaylo
   if (outcome.victory) {
     next = applyBattleWear(next);
     const jpFameBonus = next.country === 'JAPAN' ? 1.2 : 1.0;
-    const fameGain = Math.round((battle.rewardFame || 20) * jpFameBonus);
+    const fameGain = Math.round((battle.rewardFame || 20) * jpFameBonus * diffCfg.fameGainMult);
+    const rewardCash = Math.round((battle.rewardMoney || 0) * diffCfg.incomeMult);
     next.fame += fameGain;
-    next.money += battle.rewardMoney || 0;
+    next.money += rewardCash;
     next.signboardStolen = false;
 
-    // 장착 초식 실전 경험치
+    // 장착 초식 실전 경험치 (어려움 +10%, 지옥 +20% 보너스!)
     let pendingTrait = next.pendingTraitSkillId;
     next.skills = next.skills.map((s) => {
       if (!next.equippedActiveIds.includes(s.id)) return s;
-      const res = gainSkillExp(s, battle.isRealDuel ? 85 : 55);
+      const res = gainSkillExp(s, Math.round((battle.isRealDuel ? 85 : 55) * diffCfg.expGainMult));
       if (res.triggeredTrait) pendingTrait = res.updated.id;
       return res.updated;
     });
     next.pendingTraitSkillId = pendingTrait;
+
+    // ★ 사선(死線)을 넘은 자의 각성 「절처봉생(絶處逢生)」 (어려움/지옥 전용!) ★
+    if (diffCfg.id !== 'EASY' && (battle.isRealDuel || lostRatio >= 0.7)) {
+      next.stats = clampStatsByAge(
+        { ...next.stats, ins: next.stats.ins + 2, wil: next.stats.wil + 2, qi: next.stats.qi + 1 },
+        next.age
+      );
+      next = addLog(next, '★ 절처봉생(絶處逢生)! 사선을 넘어 살아남으며 통찰·정신이 날카롭게 각성했다! (통찰·정신 +2, 영력 +1)', 'MAGIC');
+    }
 
     // 무기 이력 및 가보 성장
     next.weapons = next.weapons.map((w) => {
@@ -3132,8 +3329,9 @@ export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePaylo
     }
 
     if (battle.isRealDuel) {
-      // 진검결투 패배 -> 기적 생존(영구 장애) vs 즉사
-      const surviveChance = Math.min(0.45, (next.stats.vit + next.stats.wil) * 0.004);
+      // 진검결투 패배 -> 기적 생존(영구 장애) vs 즉사 (난이도별 즉사율: 쉬움 50% / 어려움 68% / 지옥 85%!)
+      const maxSurvive = Math.max(0.1, 1 - diffCfg.realDuelDeathRate);
+      const surviveChance = Math.min(maxSurvive, (next.stats.vit + next.stats.wil) * 0.0038 * (maxSurvive / 0.45));
       const possibleDis = (['ONE_ARM', 'BLIND', 'LIMP'] as const).filter((d) => !next.disabilities.includes(d));
       if (possibleDis.length > 0 && Math.random() < surviveChance) {
         const gained = possibleDis[Math.floor(Math.random() * possibleDis.length)];

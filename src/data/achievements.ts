@@ -206,4 +206,29 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     secret: true,
     check: (s) => s.awakenings.length >= 1,
   },
+  {
+    id: 'ach_hard_clear',
+    title: '험난한 강호의 생존자',
+    description: '【어려움】 난이도에서 60세 이상 살아남거나 천수를 누렸다.',
+    category: 'LIFE',
+    check: (s) => s.difficulty === 'HARD' && (s.age >= 60 || (s.deathCause || '').includes('천수')),
+  },
+  {
+    id: 'ach_hell_survive',
+    title: '지옥에서 살아남은 자',
+    description: '【지옥】 난이도의 재해와 진검승부 속에서 50세 이상 살아남았다.',
+    category: 'SECRET',
+    secret: true,
+    check: (s) => s.difficulty === 'HELL' && s.age >= 50,
+  },
+  {
+    id: 'ach_hell_master',
+    title: '수라도의 천하무신',
+    description: '【지옥】 난이도에서 천수를 누리거나 천하제일 무술대회 우승을 차지했다.',
+    category: 'SECRET',
+    secret: true,
+    check: (s) =>
+      s.difficulty === 'HELL' &&
+      ((s.deathCause || '').includes('천수') || s.age >= 62 || (s.flags.tournamentWins || 0) >= 1),
+  },
 ];

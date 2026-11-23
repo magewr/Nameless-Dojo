@@ -1,22 +1,26 @@
 import React, { useState } from 'react';
-import { CountryId, Gender } from '../types/game';
+import { CountryId, DifficultyId, Gender } from '../types/game';
 import { COUNTRIES } from '../data/worldAndEndings';
 import { COUNTRY_LORE } from '../data/worldLore';
+import { DIFFICULTY_CONFIGS } from '../data/difficulty';
+import { hasUnlockedHellDifficulty } from '../engine/storage';
 import { PixelPortrait } from './PixelPortrait';
 import { sound } from '../engine/sound';
-import { ArrowLeft, BookOpen, Swords, X } from 'lucide-react';
+import { ArrowLeft, BookOpen, Flame, Lock, Shield, Skull, Swords, X } from 'lucide-react';
 
 interface Props {
   onBack: () => void;
-  onConfirm: (country: CountryId, gender: Gender, name: string, startAge: 15 | 20 | 28) => void;
+  onConfirm: (country: CountryId, gender: Gender, name: string, startAge: 15 | 20 | 28, difficulty: DifficultyId) => void;
 }
 
 export const CharacterCreate: React.FC<Props> = ({ onBack, onConfirm }) => {
   const [country, setCountry] = useState<CountryId>('KOREA');
   const [gender, setGender] = useState<Gender>('MALE');
   const [startAge, setStartAge] = useState<15 | 20 | 28>(20);
+  const [difficulty, setDifficulty] = useState<DifficultyId>('EASY');
   const [name, setName] = useState('이도현');
   const [showCountryLore, setShowCountryLore] = useState(false);
+  const hellUnlocked = hasUnlockedHellDifficulty();
 
   const handleCountryChange = (c: CountryId) => {
     sound.playClick();
@@ -150,14 +154,73 @@ export const CharacterCreate: React.FC<Props> = ({ onBack, onConfirm }) => {
           ))}
         </div>
 
+        {/* 3. 난이도 선택 (쉬움 / 어려움 / 지옥[1회 완주 해금]) */}
+        <div className="space-y-2">
+          <div className="grid grid-cols-3 gap-2">
+            {(['EASY', 'HARD', 'HELL'] as DifficultyId[]).map((did) => {
+              const cfg = DIFFICULTY_CONFIGS[did];
+              const locked = did === 'HELL' && !hellUnlocked;
+              const active = difficulty === did;
+              return (
+                <button
+                  key={did}
+                  disabled={locked}
+                  onClick={() => {
+                    if (locked) return;
+                    sound.playClick();
+                    setDifficulty(did);
+                  }}
+                  className={`p-2 text-center border-2 transition ${
+                    locked
+                      ? 'bg-[#140e0b] border-[#3d2d20] opacity-55 cursor-not-allowed'
+                      : active
+                      ? did === 'HELL'
+                        ? 'bg-[#4a1414] border-rose-400 cursor-pointer'
+                        : did === 'HARD'
+                        ? 'bg-[#472b12] border-amber-400 cursor-pointer'
+                        : 'bg-[#1a3322] border-emerald-400 cursor-pointer'
+                      : 'bg-[#1b120c] border-[#6b4728] hover:border-[#c9974c] cursor-pointer'
+                  }`}
+                >
+                  <div className="font-bold text-xs sm:text-sm flex items-center justify-center gap-1 text-[#fff8e7]">
+                    {locked ? (
+                      <Lock className="w-3.5 h-3.5 text-rose-400" />
+                    ) : did === 'HELL' ? (
+                      <Skull className="w-3.5 h-3.5 text-rose-400" />
+                    ) : did === 'HARD' ? (
+                      <Flame className="w-3.5 h-3.5 text-amber-400" />
+                    ) : (
+                      <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                    )}
+                    <span>{cfg.shortLabel}</span>
+                  </div>
+                  <div className="text-[10px] text-[#c7b394] mt-0.5 leading-tight">
+                    {locked ? '1회 완주 시 해금' : did === 'EASY' ? '표준·입문' : did === 'HARD' ? '재해·진검↑' : '극한 생존'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="p-2.5 bg-[#1b120c] border border-[#6b4728] space-y-1 text-[11px]">
+            <div className="font-bold text-[#fde68a]">
+              {DIFFICULTY_CONFIGS[difficulty].label} — <span className="font-normal text-[#d6cbb8]">{DIFFICULTY_CONFIGS[difficulty].subtitle}</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-[#c7b394]">
+              {DIFFICULTY_CONFIGS[difficulty].summaryBullets.map((b, i) => (
+                <div key={i}>• {b}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <button
           onClick={() => {
             sound.playDrum();
-            onConfirm(country, gender, name, startAge);
+            onConfirm(country, gender, name, startAge, difficulty);
           }}
           className="w-full seal-badge py-3.5 font-bold text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer"
         >
-          <Swords className="w-5 h-5" /> 도장 물려받기 ({COUNTRIES[country].eraLabel})
+          <Swords className="w-5 h-5" /> 도장 물려받기 ({COUNTRIES[country].eraLabel} · {DIFFICULTY_CONFIGS[difficulty].shortLabel})
         </button>
       </div>
     </div>

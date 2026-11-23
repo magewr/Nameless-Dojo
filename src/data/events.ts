@@ -18,6 +18,7 @@ import {
   getHerbPeddlerMeta,
   getPlagueMedicineMeta,
 } from './balanceRules';
+import { getDifficultyConfig, getDifficultyId } from './difficulty';
 
 function makeEnemySkill(templateId: string, level: number): Skill {
   const base = createBaseSkills().find((s) => s.id === templateId);
@@ -1341,23 +1342,148 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     };
   }
 
-  // ★ 질병 · 사망 서사 이벤트 (주인공 & 문하생 포함!) ★
-  if (state.season === 'WINTER' && !isCooling('hero_fever') && Math.random() < 0.22) {
+  // ★ 질병 · 자연재해 · 진검습격 서사 이벤트 (난이도에 따라 발생률·치명도 급상승!) ★
+  const diffCfg = getDifficultyConfig(state);
+  const diffId = getDifficultyId(state);
+
+  // [어려움 / 지옥 전용] 1) 자연재해: 대홍수 · 대흉년 · 지진!
+  if (
+    diffId !== 'EASY' &&
+    state.turn >= 6 &&
+    !isCooling('disaster_nature') &&
+    Math.random() < diffCfg.disasterRate * 0.55
+  ) {
+    const repairCost = Math.round((110 + state.facilities.yard * 45) * diffCfg.expenseMult);
+    const isFlood = state.season === 'SUMMER' || state.season === 'SPRING';
+    const isDrought = state.season === 'AUTUMN';
+    const disasterTitle = isFlood ? '천재지변 · 대홍수와 산사태' : isDrought ? '천재지변 · 대흉년과 기근' : '천재지변 · 혹한과 지진';
+    return {
+      id: `disaster_nature_${state.turn}`,
+      title: `⚠ ${disasterTitle}`,
+      category: 'LIFE',
+      sceneActor: 'MERCHANT',
+      narration: isFlood
+        ? '사흘 밤낮 쏟아진 폭우에 고을 둑이 터지고 도장 담장과 기와가 무너져 내렸다! 문하생들까지 흙더미에 깔릴 뻔한 아찔한 재난이다.'
+        : isDrought
+        ? '메뚜기 떼와 극심한 가뭄으로 고을 전체에 굶주림이 덮쳤다. 쌀값이 세 배로 치솟고 문하생들도 기력을 잃고 있다.'
+        : '한밤중 대지가 크게 흔들리며 도장 대들보가 쩍 갈라지고 혹한이 몰아닥쳤다! 당장 보수하지 않으면 큰 화를 입는다.',
+      speaker: state.spouse?.alive ? state.spouse.name : '문하생 대표',
+      dialogue: '“사부님! 당장 막대한 비용을 들여 수습하지 않으면 도장 시설과 식솔들 모두가 큰 타격을 입습니다!”',
+      options: [
+        {
+          id: 'disaster_pay',
+          label: `사재를 털어 즉각 보수·구휼한다 (-${repairCost}${cMeta.currency})`,
+          hint: `도장 시설 보호 · 문하생 생존 보장 · 인덕 +16`,
+          disabled: state.money < repairCost,
+          disabledReason: '재화 부족',
+        },
+        {
+          id: 'disaster_endure',
+          label: '“돈이 없다… 맨몸으로 버텨 낼 수밖에!”',
+          hint: `⚠ 주인공 건강 -${diffId === 'HELL' ? 20 : 14} · 시설 손상/제자 부상·이탈 위험!`,
+        },
+      ],
+      meta: { repairCost },
+    };
+  }
+
+  // [어려움 / 지옥 전용] 2) 고을 대역병 재창궐 (반복 발동 가능!)
+  if (
+    diffId !== 'EASY' &&
+    state.turn >= 10 &&
+    !isCooling('disaster_plague') &&
+    Math.random() < diffCfg.disasterRate * 0.55
+  ) {
+    const pMeta = getPlagueMedicineMeta(state);
+    const pct = Math.round(pMeta.cureChance * 100);
+    return {
+      id: `disaster_plague_${state.turn}`,
+      title: '☠ 고을 대역병(大疫病) 창궐',
+      category: 'LIFE',
+      sceneActor: 'SPOUSE',
+      narration: '시신 싣는 수레가 골목을 지나가는 끔찍한 역병이 고을에 다시 번졌다! 도장 안에도 고열과 구토를 호소하는 이들이 속출한다.',
+      speaker: state.spouse?.alive ? state.spouse.name : '동네 의원',
+      dialogue: '“사부님, 이번 역병은 지난번보다 훨씬 독합니다! 거액의 약재를 구해도 완치를 장담하기 어렵습니다!”',
+      options: [
+        {
+          id: 'plague_buy_med',
+          label: `거액을 들여 도장 전원 약재를 구한다 (-${pMeta.cost}${cMeta.currency})`,
+          hint: `완치 확률 ${pct}% · 실패 시 건강 -12 + 문하생 병사 위험!`,
+          disabled: state.money < pMeta.cost,
+          disabledReason: '재화 부족',
+        },
+        {
+          id: 'plague_endure',
+          label: '대문을 걸어 잠그고 체력과 약방으로 버틴다',
+          hint: `⚠ 높은 확률로 건강 -20 + 역병 후유증 + 제자 병사 위험!`,
+        },
+      ],
+    };
+  }
+
+  // [어려움 / 지옥 전용] 3) 살수단 · 광기의 살인검객 진검 암습!
+  if (
+    diffId !== 'EASY' &&
+    state.turn >= 8 &&
+    state.fame >= 45 &&
+    !isCooling('realduel_assassin') &&
+    Math.random() < diffCfg.disasterRate * 0.58
+  ) {
+    const bribeCost = Math.round((130 + state.fame * 0.25) * diffCfg.expenseMult);
+    const hasAliveDisc = state.disciples.some((d) => !d.dead);
+    return {
+      id: `realduel_assassin_${state.turn}`,
+      title: '⚔ 살수단의 야습 — 피할 수 없는 진검승부',
+      category: 'DUEL',
+      sceneActor: 'ENEMY',
+      narration: '한밤중 도장 마당을 시커먼 살기가 뒤덮었다. 경쟁 문파나 원한 품은 자가 보낸 살수 두목이 시퍼런 진검을 빼 들고 정면으로 걸어온다!',
+      speaker: '피의 살수 두목',
+      dialogue: `“【${state.sectName}】의 목에 현상금이 걸렸다. 오늘 밤 네 목을 따거나, 아니면 도장 금고를 통째로 털어 가겠다!”`,
+      options: [
+        {
+          id: 'real_ambush_fight',
+          label: '진검을 뽑아 들고 정면으로 맞선다 (⚠ 진검결투!)',
+          hint: `⚠ 패배 시 ${Math.round(diffCfg.realDuelDeathRate * 100)}% 즉사 / 영구장애 · 승리 시 명성 +${Math.round(55 * diffCfg.fameGainMult)} & 포상`,
+        },
+        ...(hasAliveDisc
+          ? [
+              {
+                id: 'real_ambush_sacrifice',
+                label: '문하생들과 포위해 돌파구를 연다 (제자 사상 위험!)',
+                hint: '진검결투 회피 · ⚠ 문하생 중 1명 중상 또는 전사 위험 · 명성 -15',
+              },
+            ]
+          : []),
+        {
+          id: 'real_ambush_bribe',
+          label: `금고를 열어 살수단을 매수해 물린다 (-${bribeCost}${cMeta.currency})`,
+          hint: `목숨 보전 · 재화 -${bribeCost} · 명성 -22 · 권위 -10`,
+          disabled: state.money < bribeCost,
+          disabledReason: '재화 부족',
+        },
+      ],
+      meta: { bribeCost },
+    };
+  }
+
+  // 겨울 열병 (지옥 난이도는 환절기 봄/가을에도 열병 발병 가능!)
+  const feverSeasonOk = state.season === 'WINTER' || (diffId === 'HELL' && (state.season === 'SPRING' || state.season === 'AUTUMN') && Math.random() < 0.45);
+  if (feverSeasonOk && !isCooling('hero_fever') && Math.random() < diffCfg.feverRate) {
     const fMeta = getFeverMedicineMeta(state);
     const curePct = Math.round(fMeta.cureChance * 100);
     const isElder = state.age >= 55;
     return {
       id: `hero_fever_${state.turn}`,
-      title: '매서운 겨울의 열병(熱病)',
+      title: state.season === 'WINTER' ? '매서운 겨울의 열병(熱病)' : '지독한 환절기 악성 열병(熱病)',
       category: 'LIFE',
       sceneActor: 'SPOUSE',
       narration: isElder
-        ? '매서운 겨울바람이 세월을 먹은 뼈마디 깊숙이 스며든 탓일까. 밤새 오한과 고열이 번갈아 찾아오며 기력이 뚝 떨어졌다.'
-        : '찬 바람을 맞으며 새벽 수련을 강행한 탓일까. 온몸이 불덩이처럼 달아오르며 식은땀이 멈추지 않는다.',
+        ? '매서운 바람이 세월을 먹은 뼈마디 깊숙이 스며든 탓일까. 밤새 오한과 고열이 번갈아 찾아오며 기력이 뚝 떨어졌다.'
+        : '찬 바람을 맞으며 수련을 강행한 탓일까. 온몸이 불덩이처럼 달아오르며 식은땀이 멈추지 않는다.',
       speaker: state.spouse?.alive ? state.spouse.name : '동네 의원',
       dialogue: isElder
-        ? '“연세도 있으신데 폐에 찬 기운이 깊이 들었습니다! 당장 귀한 탕약을 쓰셔야 합니다만, 올겨울 열병은 독해 약효를 장담하기 어렵습니다!”'
-        : '“폐에 찬 기운이 깊이 들었습니다! 당장 탕약을 쓰고 쉬셔야 합니다만, 올겨울 열병은 독해 약이 꼭 듣는다는 보장도 없습니다!”',
+        ? '“연세도 있으신데 폐에 찬 기운이 깊이 들었습니다! 당장 귀한 탕약을 쓰셔야 합니다만, 이번 열병은 독해 약효를 장담하기 어렵습니다!”'
+        : '“폐에 찬 기운이 깊이 들었습니다! 당장 탕약을 쓰고 쉬셔야 합니다만, 이번 열병은 독해 약이 꼭 듣는다는 보장도 없습니다!”',
       options: [
         {
           id: 'fever_medicine',
@@ -1372,7 +1498,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   }
 
   const sickDisc = state.disciples.find((d) => !d.dead && !d.isChild);
-  if (sickDisc && state.turn >= 8 && !isCooling('disciple_illness') && Math.random() < 0.16) {
+  if (sickDisc && state.turn >= 6 && !isCooling('disciple_illness') && Math.random() < diffCfg.discipleIllnessRate) {
     const dMeta = getDiscipleIllnessMeta(state);
     const payPct = Math.round(dMeta.payCureChance * 100);
     const carePct = Math.round(dMeta.careCureChance * 100);
@@ -1423,8 +1549,11 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
 
   // ★ 풍부한 순환 서사 이벤트 풀 (최근 6회 이내 발동한 계열은 자동 제외 → 반복 도배 0%!) ★
   if (!isCooling('random_dojo_breaker')) {
+    const isRealBreaker = diffCfg.realDuelUpgradeChance > 0 && Math.random() < diffCfg.realDuelUpgradeChance;
     const breakerDialogue =
-      winsCount >= 1
+      isRealBreaker
+        ? `“목검 장난 따위는 치워라! 【${state.sectName}】의 현판과 목숨을 걸고 진검으로 겨루러 왔다!”`
+        : winsCount >= 1
         ? `“천하제일 우승 문파 【${state.sectName}】에 내 이름을 시험해 보려고 천 리를 달려왔소! 목검 한 합만 받아 주십시오!”`
         : isElderHero
         ? `“전설로만 듣던 백발의 노사부님이 아직 검을 놓지 않으셨다더군요. 후학의 패기를 한 합 시험해 주십시오!”`
@@ -1433,17 +1562,26 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
         : `“여기가 요즘 입소문이 자자하다는 【${state.sectName}】인가? 지면 저 현판은 내가 떼어 가겠소!”`;
     pool.push({
       id: `random_dojo_breaker_${state.turn}`,
-      title: winsCount >= 1 || isElderHero ? '명성을 찾아온 강호 도전자' : '도장깨기 도전자의 방문',
+      title: isRealBreaker ? '⚔ 진검 도장깨기 도전자의 습격' : winsCount >= 1 || isElderHero ? '명성을 찾아온 강호 도전자' : '도장깨기 도전자의 방문',
       category: 'DUEL',
-      narration:
-        winsCount >= 1 || isElderHero
-          ? '전국을 떠돌던 혈기 왕성한 타 문파 고수가 목검을 둘러메고 대문 앞에 서서 도전을 청한다.'
-          : '오만한 표정의 타 문파 고수가 목검을 둘러메고 대문을 두드린다. 문하생들이 긴장한 눈빛으로 당신을 바라본다.',
-      speaker: '타 문파 도전자',
+      narration: isRealBreaker
+        ? '살기 어린 눈빛의 타 문파 무사가 시퍼런 진검을 빼 들고 대문 앞에 섰다! 오늘은 목검 비무가 아니다.'
+        : winsCount >= 1 || isElderHero
+        ? '전국을 떠돌던 혈기 왕성한 타 문파 고수가 목검을 둘러메고 대문 앞에 서서 도전을 청한다.'
+        : '오만한 표정의 타 문파 고수가 목검을 둘러메고 대문을 두드린다. 문하생들이 긴장한 눈빛으로 당신을 바라본다.',
+      speaker: isRealBreaker ? '살기 띤 도장깨기 검객' : '타 문파 도전자',
       dialogue: breakerDialogue,
       options: [
-        { id: 'breaker_fight', label: '도전을 받아들여 마당에 선다 (비무 / 제자 대리전 가능)', hint: '승리 시 명성 & 포상금 · 패배 시 현판 강탈' },
-        { id: 'breaker_ignore', label: '“쓸데없는 힘자랑은 사절이오” 돌려보낸다', hint: '명성 -8 · 구도 +5' },
+        {
+          id: isRealBreaker ? 'breaker_fight_real' : 'breaker_fight',
+          label: isRealBreaker
+            ? '진검을 뽑아 도전에 응한다 (⚠ 진검결투 · 사망/장애 위험!)'
+            : '도전을 받아들여 마당에 선다 (비무 / 제자 대리전 가능)',
+          hint: isRealBreaker
+            ? `⚠ 패배 시 ${Math.round(diffCfg.realDuelDeathRate * 100)}% 즉사/장애 · 승리 시 명성↑ & 포상금`
+            : '승리 시 명성 & 포상금 · 패배 시 현판 강탈',
+        },
+        { id: 'breaker_ignore', label: '“쓸데없는 힘자랑은 사절이오” 돌려보낸다', hint: `명성 -${isRealBreaker ? 16 : 8} · 구도 +5` },
       ],
     });
   }

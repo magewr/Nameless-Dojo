@@ -1,5 +1,6 @@
 export type CountryId = 'KOREA' | 'CHINA' | 'JAPAN';
 export type Gender = 'MALE' | 'FEMALE';
+export type DifficultyId = 'EASY' | 'HARD' | 'HELL';
 export type Season = 'SPRING' | 'SUMMER' | 'AUTUMN' | 'WINTER';
 
 export type ScheduleActivityId =
@@ -390,6 +391,7 @@ export interface LegacyRecord {
   id: string;
   savedAt: string;
   country: CountryId;
+  difficulty?: DifficultyId;
   founderName: string;
   sectName: string;
   finalTitle: string;
@@ -407,6 +409,7 @@ export type ScreenPhase = 'TITLE' | 'CREATE' | 'PROLOGUE' | 'MAIN' | 'BATTLE' | 
 
 export interface GameState {
   phase: ScreenPhase;
+  difficulty?: DifficultyId;
   country: CountryId;
   gender: Gender;
   name: string;

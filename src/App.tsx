@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   BattleTactic,
   CountryId,
+  DifficultyId,
   DiscipleRole,
   DojoFacilities,
   GameState,
@@ -21,8 +22,10 @@ import {
   createNewGame,
   executeScheduleActivity,
   FACILITY_INFO,
+  getFacilityUpgradeCost,
   getMaxActiveSlots,
   getMaxPassiveSlots,
+  getShopPrice,
   getWeaponUpgradeCost,
   performDojoInvestment,
   resolveEventOption,
@@ -234,8 +237,8 @@ export function App() {
     }
   };
 
-  const handleCreateConfirm = (country: CountryId, gender: Gender, name: string, startAge: 15 | 20 | 28) => {
-    setState(createNewGame(country, gender, name, startAge));
+  const handleCreateConfirm = (country: CountryId, gender: Gender, name: string, startAge: 15 | 20 | 28, difficulty: DifficultyId) => {
+    setState(createNewGame(country, gender, name, startAge, difficulty));
     setCreating(false);
   };
 
@@ -361,7 +364,7 @@ export function App() {
   const handleUpgradeFacility = (key: keyof DojoFacilities) => {
     const lv = state.facilities[key];
     if (lv >= 4 || state.activeBuild) return;
-    const cost = FACILITY_INFO[key].costs[lv];
+    const cost = getFacilityUpgradeCost(FACILITY_INFO[key].costs[lv], state);
     if (state.money < cost) return;
     const targetName = FACILITY_INFO[key].stages[lv];
     const acts = state.seasonPlan.activities.includes('BUILD')
@@ -390,7 +393,7 @@ export function App() {
   const handleUpgradeWeapon = (weaponId: string) => {
     const w = state.weapons.find((x) => x.id === weaponId);
     if (!w) return;
-    const cost = getWeaponUpgradeCost(w.upgradeLevel);
+    const cost = getWeaponUpgradeCost(w.upgradeLevel, state);
     if (state.money < cost) return;
     setState(
       addLog(
@@ -413,8 +416,10 @@ export function App() {
 
   const handleBuyWeapon = (weaponId: string) => {
     const w = getWeaponById(weaponId);
-    if (!w || state.money < w.price) return;
-    setState(addLog({ ...state, money: state.money - w.price, weapons: [...state.weapons, w] }, `병기 「${w.name}」을(를) 구매했다.`, 'GOOD'));
+    if (!w) return;
+    const price = getShopPrice(w.price, state);
+    if (state.money < price) return;
+    setState(addLog({ ...state, money: state.money - price, weapons: [...state.weapons, w] }, `병기 「${w.name}」을(를) 구매했다.`, 'GOOD'));
   };
 
   const handleBuyMerchantBook = (bookId: string) => {

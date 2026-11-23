@@ -5,6 +5,7 @@ import {
   SeasonTickResult,
 } from '../types/game';
 import { COUNTRIES, SEASON_META } from '../data/worldAndEndings';
+import { getDifficultyConfig } from '../data/difficulty';
 import { getWorldLoreArticles, STAT_GUIDE } from '../data/worldLore';
 import {
   getChromaSprite,
@@ -695,6 +696,14 @@ export const DojoSimView: React.FC<Props> = ({
                     <span className="bg-[#b52b27] text-white px-1.5 py-0.5 text-[10px] font-bold shrink-0">
                       {state.year} {sMeta.label}
                     </span>
+                    {(() => {
+                      const dCfg = getDifficultyConfig(state);
+                      return (
+                        <span className={`px-1.5 py-0.5 text-[10px] font-bold border shrink-0 ${dCfg.badgeColor}`}>
+                          {dCfg.id === 'HELL' ? '☠ 지옥' : dCfg.shortLabel}
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {/* 2줄: 문파 이명(전체 표시!) + 건강/재화/명성 */}

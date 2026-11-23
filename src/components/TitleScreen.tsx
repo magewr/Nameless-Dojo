@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { LegacyRecord } from '../types/game';
+import { DIFFICULTY_CONFIGS } from '../data/difficulty';
 import { loadGameState, loadLegacyRecords, loadUnlockedAchievements } from '../engine/storage';
 import { ACHIEVEMENTS } from '../data/achievements';
 import { AchievementsModal } from './AchievementsModal';
@@ -110,7 +111,7 @@ export const TitleScreen: React.FC<Props> = ({ onNewGame, onContinue }) => {
                       <span className="seal-badge text-[11px] px-1.5 py-0.5">{rec.finalTitle}</span>
                     </div>
                     <div className="text-xs text-[#c7b394]">
-                      {rec.deathYear}년 향년 {rec.deathAge}세 ({rec.deathCause}) · 명성 {rec.fame}
+                      [{DIFFICULTY_CONFIGS[rec.difficulty || 'EASY'].shortLabel}] {rec.deathYear}년 향년 {rec.deathAge}세 ({rec.deathCause}) · 명성 {rec.fame}
                     </div>
                     <div className="text-xs text-sky-300 font-bold">{rec.endingTitle}</div>
                   </div>

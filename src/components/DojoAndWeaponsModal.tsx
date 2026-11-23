@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DojoFacilities, GameState, Weapon } from '../types/game';
-import { FACILITY_INFO, getDojoInvestmentCosts, getWeaponUpgradeCost } from '../engine/gameLogic';
+import { FACILITY_INFO, getDojoInvestmentCosts, getFacilityUpgradeCost, getShopPrice, getWeaponUpgradeCost } from '../engine/gameLogic';
 import { ALL_WEAPONS_CATALOG } from '../data/weapons';
 import { COUNTRIES } from '../data/worldAndEndings';
 import { WEAPON_GROUP_LABEL } from '../data/booksAndSkills';
@@ -113,7 +113,7 @@ export const DojoAndWeaponsModal: React.FC<Props> = ({
                   const info = FACILITY_INFO[key];
                   const lv = state.facilities[key];
                   const isMax = lv >= 4;
-                  const cost = isMax ? 0 : info.costs[lv];
+                  const cost = isMax ? 0 : getFacilityUpgradeCost(info.costs[lv], state);
                   const isBuildingThis = state.activeBuild?.facilityKey === key;
                   return (
                     <div key={key} className={`p-3 border-2 flex flex-col justify-between gap-2 ${isBuildingThis ? 'bg-[#2e2014] border-[#fde047]' : 'bg-[#1b120c] border-[#5c432c]'}`}>
@@ -201,7 +201,7 @@ export const DojoAndWeaponsModal: React.FC<Props> = ({
               {state.weapons.map((w) => {
                 const eq = state.equippedWeaponId === w.id;
                 const maxUp = Math.min(5, state.facilities.forge + 1);
-                const upCost = getWeaponUpgradeCost(w.upgradeLevel);
+                const upCost = getWeaponUpgradeCost(w.upgradeLevel, state);
                 return (
                   <div key={w.id} className={`p-3 border-2 space-y-2 ${eq ? 'bg-[#332216] border-[#f2c96b]' : 'bg-[#1b120c] border-[#5c432c]'}`}>
                     <div className="flex items-center justify-between gap-2">
@@ -247,7 +247,9 @@ export const DojoAndWeaponsModal: React.FC<Props> = ({
 
           {tab === 'SHOP' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {shopWeapons.map((w) => (
+              {shopWeapons.map((w) => {
+                const wPrice = getShopPrice(w.price, state);
+                return (
                 <div key={w.id} className="p-3 bg-[#1b120c] border-2 border-[#5c432c] flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="font-bold text-sm text-[#fde68a] truncate">{w.name}</div>
@@ -257,12 +259,13 @@ export const DojoAndWeaponsModal: React.FC<Props> = ({
                     <button onClick={() => { sound.playClick(); setDetailWeapon(w); }} className="rpg-btn px-2 py-1.5 text-[11px] flex items-center gap-0.5 cursor-pointer">
                       <Info className="w-3 h-3 text-sky-300" /> 상세
                     </button>
-                    <button disabled={state.money < w.price} onClick={() => { sound.playClick(); onBuyWeapon(w.id); }} className="seal-badge px-2.5 py-1.5 text-xs font-bold disabled:opacity-40 cursor-pointer">
-                      {w.price}{currency}
+                    <button disabled={state.money < wPrice} onClick={() => { sound.playClick(); onBuyWeapon(w.id); }} className="seal-badge px-2.5 py-1.5 text-xs font-bold disabled:opacity-40 cursor-pointer">
+                      {wPrice}{currency}
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

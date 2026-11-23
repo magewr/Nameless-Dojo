@@ -3,7 +3,8 @@ import { GameState, LegacyRecord } from '../types/game';
 import { COUNTRIES, generatePostMortemEnding } from '../data/worldAndEndings';
 import { BOOK_SKILL_TEMPLATES, MASTERY_NAMES } from '../data/booksAndSkills';
 import { getDojoMapSrc } from '../pixel/spriteLoader';
-import { appendLegacyRecord, clearGameState } from '../engine/storage';
+import { appendLegacyRecord, clearGameState, hasUnlockedHellDifficulty, markGameCleared } from '../engine/storage';
+import { getDifficultyConfig } from '../data/difficulty';
 import { PixelPortrait } from './PixelPortrait';
 import { Award, ChevronLeft, ChevronRight, GitBranch, History, RotateCcw, ScrollText } from 'lucide-react';
 import { sound } from '../engine/sound';
@@ -145,6 +146,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
       id: `leg_${Date.now()}`,
       savedAt: new Date().toISOString(),
       country: state.country,
+      difficulty: state.difficulty || 'EASY',
       founderName: state.name,
       sectName: state.sectName,
       finalTitle: state.currentTitle,
@@ -157,6 +159,11 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
       heirloomWeapon: heirloom,
       endingTitle: report.endingTitle,
     };
+    const qualifiedClear =
+      state.age >= 55 ||
+      (state.deathCause || '').includes('천수') ||
+      (state.flags.tournamentWins || 0) >= 1;
+    if (qualifiedClear) markGameCleared();
     appendLegacyRecord(record);
     clearGameState();
     setSavedLegacy(true);
@@ -264,10 +271,15 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
       <div className="rpg-window max-w-4xl w-full overflow-hidden flex flex-col animate-ink h-fit">
         <div className="bg-[#18100b] text-[#f5ecd9] p-5 sm:p-7 text-center space-y-2 border-b-2 border-[#c9974c]">
           <div className="inline-block seal-badge text-xs px-3 py-0.5 tracking-widest">
-            {state.year}년 영면 · 향년 {state.age}세 ({state.deathCause || '천수'})
+            [{getDifficultyConfig(state).shortLabel}] {state.year}년 영면 · 향년 {state.age}세 ({state.deathCause || '천수'})
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-[#fde68a] pt-1">{report.endingTitle}</h1>
           <p className="text-xs text-[#d6cbb8]">{report.endingSubtitle} · {COUNTRIES[state.country].name}</p>
+          {(state.age >= 55 || (state.deathCause || '').includes('천수') || (state.flags.tournamentWins || 0) >= 1) && (
+            <div className="inline-block px-2.5 py-1 text-[11px] font-bold bg-rose-950/80 border border-rose-400 text-rose-200">
+              ☠ {hasUnlockedHellDifficulty() ? '【지옥 · 수라의 시대】 난이도 해금 완료!' : '일생 완주 달성! 【지옥 · 수라의 시대】 난이도 해금!'}
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 border-b-2 border-[#6b4728] bg-[#221710] text-xs sm:text-sm font-bold">
