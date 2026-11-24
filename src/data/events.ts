@@ -23,6 +23,7 @@ import { getDifficultyConfig, getDifficultyId } from './difficulty';
 import { pickDramaEvent } from './sectEvents';
 import { bestSect, getSects, metSects, sectTag, worstSect } from './sects';
 import { rollTemperament } from './temperament';
+import { buildBloodGrudgeEvent } from './battleDialogue';
 
 function makeEnemySkill(templateId: string, level: number): Skill {
   const base = createBaseSkills().find((s) => s.id === templateId);
@@ -1114,8 +1115,9 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     });
   }
 
-  // 20년 전 원수의 아들 (진검결투 — 살기 높고 중년 이상 1회)
-  if (state.reputation.ruthless >= 45 && state.age >= 42 && !triggered.has('duel_revenge_son')) {
+  // 20년 전 원수의 아들 (진검결투 — 실제 진검 원한 기록이 없을 때만 살기 높은 중년 이상 1회 발동)
+  const hasRealGrudge = (state.flags.bloodGrudges || []).length > 0;
+  if (!hasRealGrudge && state.reputation.ruthless >= 45 && state.age >= 42 && !triggered.has('duel_revenge_son')) {
     pool.push({
       id: 'duel_revenge_son',
       title: '스무 해 전 원수의 아들 — 진검결투',
@@ -1124,7 +1126,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       speaker: '원수의 아들',
       dialogue: '“아버지의 원수! 오늘 여기서 네 목을 베어 무덤 앞에 바치겠다!”',
       options: [
-        { id: 'demon_duel', label: '“네 아비의 검을 기억한다. 덤벼라.” (진검결투)', hint: '⚠ 패배 시 사망/영구장애 · 승리 시 명성 +60' },
+        { id: 'revenge_son_duel', label: '“네 아비의 검을 기억한다. 덤벼라.” (진검결투)', hint: '⚠ 패배 시 사망/영구장애 · 승리 시 명성 +60 & 처분 결정' },
         { id: 'demon_swarm', label: '제자들과 함께 제압해 칼을 빼앗고 돌려보낸다', hint: '안전 · 위엄 소폭 하락' },
       ],
     });
@@ -1335,6 +1337,18 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     };
   }
 
+  // ★ 진검결투에서 베어 죽인 자의 동료·자식·문도가 「복수의 혈귀」가 되어 찾아오는 연쇄 이벤트! ★
+  const readyGrudge = (state.flags.bloodGrudges || []).find(
+    (g) => !g.resolved && state.turn - g.killedTurn >= 10
+  );
+  if (readyGrudge && !isCooling('blood_grudge')) {
+    const yearsPassed = Math.max(1, state.year - readyGrudge.killedYear);
+    const triggerChance = yearsPassed >= 6 ? 0.44 : 0.24;
+    if (Math.random() < triggerChance) {
+      return buildBloodGrudgeEvent(state, readyGrudge);
+    }
+  }
+
   // ★ 독립(하산)한 제자의 재방문 이벤트 (대성한 거물 / 출세한 인물 / 평범한 잡인 / 배신해 적으로 돌아온 제자!) ★
   const revisitTarget = (state.graduatedDisciples || []).find(
     (g) => !g.revisited && state.year - g.graduatedYear >= 3 && Math.random() < 0.36
@@ -1350,7 +1364,8 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
         speaker: revisitTarget.name,
         dialogue: `“오랜만입니다, 옛 사부님! ${revisitTarget.joinedSectName ? `${sectTag(revisitTarget.joinedSectName)}에서` : '타 문파에서'} 갈고닦은 칼로 오늘 【${state.sectName}】의 콧대를 꺾어 드리겠습니다!”`,
         options: [
-          { id: 'grad_betray_fight', label: '“배은망덕한 놈, 스승의 칼맛을 다시 보여 주마!” (비무 대결)', hint: '승리 시 명성 +55 · 배신 제자 제압' },
+          { id: 'grad_betray_fight', label: '“배은망덕한 놈, 목검으로 스승의 가르침을 다시 새겨 주마!” (비무 대결)', hint: '승리 시 명성 +55 · 배신 제자 제압' },
+          { id: 'grad_betray_real_fight', label: '“스승에게 칼을 들이민 이상 진검으로 사문의 법도를 보이겠다!” (⚠ 진검결투)', hint: '⚠ 패배 시 사망/장애 · 승리 시 명성 +75 & 배신 제자 처분 결정' },
           { id: 'grad_betray_forgive', label: '“네 원망도 내 탓이다. 칼을 거두고 돌아가거라.”', hint: '명성 -10 · 인덕 +18 · 구도 +10' },
         ],
         meta: { gradId: revisitTarget.id, gradName: revisitTarget.name, gradPower: revisitTarget.powerScore },

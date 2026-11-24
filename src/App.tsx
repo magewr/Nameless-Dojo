@@ -100,8 +100,11 @@ export function App() {
     skipMode: boolean;
   } | null>(null);
 
+  // 이벤트가 새로 뜨면 대문 입장 연출 후 대화창을 연다. (단, 진검전투 직후 상대 처분 이벤트는 방금 끝난 마당 위이므로 즉시 열기!)
   useEffect(() => {
-    if (state?.activeEvent) setSceneReady(false);
+    if (state?.activeEvent) {
+      setSceneReady(state.activeEvent.id.startsWith('duel_aftermath_'));
+    }
   }, [state?.activeEvent?.id]);
 
   // localStorage 자동 저장 + 도전과제 실시간 달성 판정 & 토스트 알림!
@@ -277,8 +280,8 @@ export function App() {
           const prev = state;
           const next = applyBattleOutcome(prev, outcome);
           setState({ ...next, pendingNotice: null });
-          // 사망 엔딩이 아니라면 전투 후일담 결론 컷신(EventResultModal)을 반드시 표시!
-          if (next.phase === 'MAIN') {
+          // 사망 엔딩이 아니라면 전투 후일담 표시! (진검전투 승리 후 사후 처분 이벤트가 바로 이어지면 중복 모달 없이 처분 이벤트로 직행)
+          if (next.phase === 'MAIN' && !next.activeEvent) {
             const conc = buildBattleConclusionNotice(prev, next, activeBattle, outcome);
             if (next.pendingNotice && next.pendingNotice.length > 0) {
               setEventResultNotice({ title: activeBattle.title, npcRole: 'RIVAL', lines: next.pendingNotice, badges: conc.badges });
@@ -725,6 +728,9 @@ export function App() {
                   ? 'SPOUSE'
                   : 'DISCIPLE';
 
+              const preBattleBadges = Array.isArray(ev.meta?.battleBadges)
+                ? (ev.meta.battleBadges as EventResultNotice['badges'])
+                : [];
               setEventResultNotice({
                 title: ev.title,
                 npcRole,
@@ -734,7 +740,7 @@ export function App() {
                     : customOutcome && customOutcome.length > 0
                     ? customOutcome
                     : [{ speaker: '나레이션', role: 'NARRATOR', text: latestLogText }],
-                badges,
+                badges: [...preBattleBadges, ...badges],
               });
             }
           }}

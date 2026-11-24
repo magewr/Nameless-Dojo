@@ -472,6 +472,41 @@ export interface TemporaryStatus {
 
 export type EnemyAiType = 'AGGRESSIVE' | 'DUELIST' | 'HEAVY' | 'RUSHDOWN' | 'RANGED' | 'OLD_MASTER';
 
+export type BattleEnemyKind =
+  | 'REBEL_DISCIPLE'
+  | 'BETRAYER_DISCIPLE'
+  | 'BLOOD_AVENGER'
+  | 'RIVAL'
+  | 'GRANDMASTER'
+  | 'SECT_SPAR'
+  | 'SECT_PEACE'
+  | 'SECT_DUEL'
+  | 'SECT_RAID'
+  | 'SECT_AID'
+  | 'ASSASSIN'
+  | 'DEMON'
+  | 'DEBT'
+  | 'OFFICER'
+  | 'FOREIGN'
+  | 'THUG'
+  | 'HERMIT'
+  | 'TOURNAMENT'
+  | 'SPAR'
+  | 'BREAKER';
+
+export interface BloodGrudge {
+  id: string;
+  victimName: string;
+  victimTitle: string;
+  victimKind: BattleEnemyKind;
+  killedYear: number;
+  killedTurn: number;
+  sectId?: string;
+  avengerRelation: '자식' | '사제(師弟)' | '동료' | '아우' | '연인' | '문도';
+  avengerName: string;
+  resolved?: boolean;
+}
+
 export interface BattleConfig {
   id: string;
   title: string;
@@ -488,6 +523,16 @@ export interface BattleConfig {
   enemyStats: Stats;
   enemyWeaponGroup: WeaponGroup;
   enemySkills: Skill[];
+  enemyKind?: BattleEnemyKind;
+  grudgeMeta?: {
+    grudgeId?: string;
+    victimName?: string;
+    avengerRelation?: string;
+    killedYear?: number;
+    sectId?: string;
+    leaderId?: string;
+    followerIds?: string[];
+  };
   rewardMoney?: number;
   rewardFame?: number;
   rewardBookId?: string;
@@ -652,6 +697,7 @@ export interface GameState {
     forbiddenCastCount: number;
     realDuelWins: number;
     realDuelKills: number;
+    bloodGrudges?: BloodGrudge[];
     wroteManual: boolean;
     royalAlliance: boolean;
     westernFear: boolean;

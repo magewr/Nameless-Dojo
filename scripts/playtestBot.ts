@@ -341,6 +341,11 @@ for (const strat of strategies) {
           else if (st.age >= 50) { agg.battlesOld++; if (out.victory) agg.winsOld++; agg.sumParriesOld += out.justParriesCount; }
         }
         st = applyBattleOutcome(st, out);
+        if (st.activeEvent && st.activeEvent.id.startsWith('duel_aftermath_')) {
+          const ev2 = st.activeEvent;
+          const opt = ev2.options[Math.floor(Math.random() * ev2.options.length)] || ev2.options[0];
+          st = resolveEventOption(st, ev2, opt.id);
+        }
         if (st.phase === 'ENDING') break;
       }
 
@@ -620,6 +625,13 @@ for (const diff of diffs) {
         const tactic: BattleTactic = st.age >= 45 ? 'COUNTER' : 'BALANCED';
         const out = simulateAutoBattleQuick(st, st.pendingBattle, 'HERO', tactic);
         st = applyBattleOutcome(st, out);
+        if (st.activeEvent && st.activeEvent.id.startsWith('duel_aftermath_')) {
+          const ev2 = st.activeEvent;
+          const opt = ev2.options[Math.floor(Math.random() * ev2.options.length)] || ev2.options[0];
+          const txt2 = `${ev2.title}${ev2.narration}${ev2.dialogue || ''}${ev2.options.map((o) => o.label + (o.hint || '')).join('')}`;
+          if (/undefined|NaN|\[object|【】/.test(txt2)) failures.push(`진검 처분 문구 오류: ${ev2.id}`);
+          st = resolveEventOption(st, ev2, opt.id);
+        }
       }
       if (st.phase === 'ENDING') break;
 
