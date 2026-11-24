@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { BattleConfig, BattleTactic, Disciple, GameState, Skill, Stats, Weapon } from '../types/game';
 import { BattleOutcomePayload } from '../engine/gameLogic';
 import { simulateAutoBattleQuick } from '../engine/autoBattleSim';
+import { bladeDamageMult, checkSurrender, fatalBlowChance, fatalBlowDamage, yieldThreshold } from '../engine/duelRules';
+import { applyTranscendParry, hasTranscendence, isUnparryableByTranscendence } from '../data/booksAndSkills';
 import { sound } from '../engine/sound';
 import {
   getEnemyFightGridSrc,
@@ -33,6 +35,7 @@ import {
 import { detectNpcGender, PixelPortrait } from './PixelPortrait';
 import { HANJA_GLOSSARY, InGameTooltip } from './InGameUI';
 import { TOURNAMENT_ROUNDS } from '../data/tournament';
+import { getDifficultyId } from '../data/difficulty';
 import { FastForward, Flame, Play, Shield, Skull, Snowflake, Swords, Trophy, User, Users, Zap } from 'lucide-react';
 
 interface Props {
@@ -222,6 +225,7 @@ interface FighterRuntime {
   weapon?: Weapon;
   skills: Skill[];
   passives: string[];
+  transcended?: boolean; // 극의의 경지 (장착 초식·심법 중 Lv.10이 있음)
   passiveBonus?: { qiRegen: number; dmgReduce: number; allDmg: number; parry: number; maxHp: number };
   cooldowns: Record<string, number>;
   blockingUntil: number;
@@ -235,6 +239,7 @@ interface FighterRuntime {
   clashPoseUntil: number; // 공격이 막힌 쪽이 칼을 내지른 자세 그대로 버티는 시간 (맞은 자세가 아니다)
   clashFrame: number;
   counterBuffUntil: number;
+  yielded?: boolean; // 목검 비무에서 무릎 꿇고 항복함
   pendingCounter?: { skill: Skill; formNum: number; triggerAt: number; chain: number };
   shoutText: string;
   shoutSub: string;
@@ -430,6 +435,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
     justParries: 0,
     recoilHealthLoss: 0,
     recoilLifespanYears: 0,
+    fatalDealt: 0,
+    fatalTaken: 0,
     pThinkAt: 0,
     eThinkAt: 0,
     finished: false,
@@ -531,6 +538,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       weapon: pWeapon,
       skills: pSkills,
       passives: pPassives,
+      transcended: hasTranscendence([...pSkills, ...equippedPassiveSkills]),
       passiveBonus: pPassiveBonus,
       cooldowns: {},
       blockingUntil: 0,
@@ -569,6 +577,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       stats: battle.enemyStats,
       skills: battle.enemySkills,
       passives: [],
+      transcended: hasTranscendence(battle.enemySkills),
       cooldowns: {},
       blockingUntil: 0,
       invulnUntil: 0,
@@ -626,6 +635,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       justParries: 0,
       recoilHealthLoss: 0,
       recoilLifespanYears: 0,
+      fatalDealt: 0,
+      fatalTaken: 0,
       pThinkAt: performance.now() + 480,
       eThinkAt: performance.now() + 760,
       finished: false,
@@ -938,9 +949,28 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       const hasElementBurst =
         sk.element === 'FIRE' || sk.element === 'LIGHTNING' || sk.element === 'ICE' || sk.element === 'SHADOW' || !!sk.isForbidden || (sk.element === 'QI' && prof.tier >= 2);
       const chainBonus = isCounterRiposte && counterChain > 1 ? 1 + Math.min(4, counterChain - 1) * 0.14 : 1.0;
-      const dmg = Math.max(6, Math.round(computeDamage(atk, def, sk, atkIsP, now, isCounterRiposte) * hitScale * chainBonus));
+      // ★ 목검은 한 대가 가볍고, 진검은 무겁다. 진검은 깨끗이 들어간 일격이 치명상(致命傷)이 되기도 한다.
+      const isReal = battle.isRealDuel;
+      let dmg = Math.max(isReal ? 6 : 3, Math.round(computeDamage(atk, def, sk, atkIsP, now, isCounterRiposte) * hitScale * chainBonus * bladeDamageMult(isReal)));
+      let isFatal = false;
+      // 무사수행에서 자비로운 상대(MERCY)는 주인공에게 치명상을 넣지 않는다.
+      const enemySpares = !atkIsP && battle.journeyStakes === 'MERCY';
+      if (isReal && !enemySpares && def.hp > 0 && Math.random() < fatalBlowChance(atk.stats, def.stats, true, isCounterRiposte) * (isSecondHit ? 0.5 : 1)) {
+        dmg = Math.max(dmg, fatalBlowDamage(def.maxHp, def.stats));
+        isFatal = true;
+        if (atkIsP) metaRef.current.fatalDealt += 1;
+        else metaRef.current.fatalTaken += 1;
+      }
 
       def.hp = Math.max(0, def.hp - dmg);
+      if (isFatal) {
+        // 피가 튀고 화면이 붉게 멎는다
+        metaRef.current.timeSlowUntil = now + 420;
+        metaRef.current.timeSlowColor = '#7f1d1d';
+        metaRef.current.inkFlashUntil = now + 180;
+        spawnInkSplatter(def.x, 252, facing, 22, '#b91c1c');
+        pushFloat({ x: def.x, y: FLOAT_STATUS_Y, text: '치명상!', color: '#ef4444', life: 1.2, maxLife: 1.2, scale: 1.5 });
+      }
       def.hurtFlashUntil = now + HIT_FLASH_MS;
       def.hurtPoseUntil = now + (isCounterRiposte ? 380 : 260);
       const knock = (isCounterRiposte ? 34 : prof.isArmorBreak ? 28 : 16) * (isSecondHit ? 0.7 : 1);
@@ -1074,7 +1104,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           def.x,
           248,
           facing,
-          `${atk.sectTitle} 극의 절명 연참 · 【${sk.customName || sk.name}】`
+          `${atk.sectTitle} ${sk.masteryLevel >= 10 ? '극의 ' : ''}절명 연참 · 【${sk.customName || sk.name}】`
         );
         metaRef.current.hitstopUntil = Math.max(metaRef.current.hitstopUntil, now + 980);
       }
@@ -1106,7 +1136,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
         facing
       );
 
-      const dmgLabel = isCounterRiposte ? `반격 -${dmg}!` : isSecondHit ? `연격 -${dmg}` : `-${dmg}`;
+      const dmgLabel = isFatal ? `-${dmg}` : isCounterRiposte ? `반격 -${dmg}!` : isSecondHit ? `연격 -${dmg}` : `-${dmg}`;
       pushFloat({
         x: def.x + facing * 62,
         y: FLOAT_DAMAGE_Y,
@@ -1119,7 +1149,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
 
       const nm = sk.customName || sk.name;
       pushLog(
-        isCounterRiposte
+        isFatal
+          ? `☠ ${atk.name}의 「${nm}」이(가) ${def.name}의 급소를 갈랐다! 치명상! (${dmg} 피해)`
+          : isCounterRiposte
           ? `★ 【${atk.sectTitle}】 반격 · ${nm} 작렬!! (${dmg} 치명 피해)`
           : `${atk.name}, 「${nm}」 ${isSecondHit ? '2연격 ' : ''}명중! (${dmg} 피해)`
       );
@@ -1162,7 +1194,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           : `${f.sectTitle} 반격 · ${skillLabel}!`
         : `${f.sectTitle} ${formNumber}식 · ${skillLabel}!`;
       f.shoutText = callout;
-      f.shoutSub = prof.traitCallout || (sk.masteryLevel >= 6 ? `Lv.${sk.masteryLevel} 극의` : '');
+      f.shoutSub = prof.traitCallout || (sk.masteryLevel >= 10 ? '극의(極意)' : sk.masteryLevel >= 6 ? `Lv.${sk.masteryLevel} 오의` : '');
       f.shoutUntil = now + (isCounterRiposte ? 1050 : 880);
       f.shoutIsCounter = isCounterRiposte;
 
@@ -1285,7 +1317,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
       // ★ 가속 정교 연환 공방(Progressive Precision Counter Chain, 최대 8합!) ★
       // 1~2합은 맞칼 기세로 반격의 반격이 활발하게 터지고, 3~7합으로 깊어질수록 통찰·민첩·정신·영력·반격기 숙련도의 정교한 능력치 격차로 결판!
       const curChain = act.counterChain || 0;
-      const isUnblockable = sk.imprintedTraits.some((t) => t.effect.unblockable);
+      // 극의 초식은 극의에 이르지 못한 자가 읽을 수 없다 — 피하는 수밖에 없다.
+      const isTranscendStrike = isUnparryableByTranscendence(sk, !!def.transcended);
+      const isUnblockable = sk.imprintedTraits.some((t) => t.effect.unblockable) || isTranscendStrike;
       const grandmasterCanDeflectCounter = Boolean(act.isCounterRiposte) && def.stats.ins >= 65;
       if (!isSecondHit && curChain < 8) {
         const defParrySkills = def.skills.filter(
@@ -1357,9 +1391,11 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             )
           );
         }
+        // 경지의 차이: 극의를 지닌 쪽이 상대의 수를 먼저 읽는다.
+        parryChance = applyTranscendParry(parryChance, !!atk.transcended, !!def.transcended);
         const dodgeChance = Math.max(0.06, Math.min(0.62, 0.1 + def.stats.agi * 0.0046 + (def.stats.agi - atk.stats.agi) * 0.002));
 
-        const blocksPrevented = (sk.telegraph === 'RED' || isUnblockable) && !grandmasterCanDeflectCounter;
+        const blocksPrevented = (sk.telegraph === 'RED' || isUnblockable) && !(grandmasterCanDeflectCounter && !isTranscendStrike);
 
         // 적색 방어불가 강공 → 패링 불가! 오직 민첩 회피만 가능 (반격 위주 고수 상대 핵심 전략!)
         if (blocksPrevented && Math.random() < dodgeChance) {
@@ -1663,7 +1699,43 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           return wv.life > 0 && wv.x > -60 && wv.x < CANVAS_W + 60;
         });
 
-        if (p.hp <= 0 || e.hp <= 0) {
+        // ★ 목검 비무: 체력이 바닥나기 전에 먼저 무릎 꿇은 쪽이 진다 (진검결투엔 항복이 없다)
+        const yielder =
+          p.hp > 0 && e.hp > 0 && !battle.isRealDuel
+            ? checkSurrender(p.hp / p.maxHp, e.hp / e.maxHp, yieldThreshold(p.stats, false), yieldThreshold(e.stats, false))
+            : null;
+        if (yielder) {
+          metaRef.current.finished = true;
+          const loser = yielder === 'P' ? p : e;
+          const victory = yielder === 'E';
+          loser.yielded = true;
+          loser.action = null;
+          pushFloat({ x: loser.x, y: FLOAT_STATUS_Y, text: '항복!', color: '#e2e8f0', life: 1.6, maxLife: 1.6, scale: 1.45 });
+          sound.playDrum(panAt(loser.x));
+          metaRef.current.timeSlowUntil = now + 360;
+          metaRef.current.timeSlowColor = victory ? '#fde047' : '#94a3b8';
+          if (victory) setTimeout(() => sound.playLevelUp(), 420);
+          pushLog(`${loser.name}이(가) 목검을 내려놓고 한쪽 무릎을 꿇었다 — 항복!`);
+          const finalPayload: BattleOutcomePayload = {
+            victory,
+            fighterType,
+            discipleId: fighterType === 'DISCIPLE' ? selectedDiscipleId : undefined,
+            usedMagic: metaRef.current.usedMagic,
+            usedForbidden: metaRef.current.usedForbidden,
+            justParriesCount: metaRef.current.justParries,
+            recoilHealthLoss: metaRef.current.recoilHealthLoss,
+            recoilLifespanYears: metaRef.current.recoilLifespanYears,
+            hpRemainingRatio: p.hp / p.maxHp,
+            endedBy: 'SURRENDER',
+            fatalWoundsTaken: 0,
+            fatalWoundsDealt: 0,
+          };
+          setCommentary(victory ? `승부 결정! ${e.name}이(가) 항복했다! 【${p.sectTitle}】 ${p.name}의 승리!` : `승부 결정! ${p.name}이(가) 무릎을 꿇고 항복했다…`);
+          setTimeout(() => {
+            setResultOutcome(finalPayload);
+            setStage('RESULT');
+          }, 1400);
+        } else if (p.hp <= 0 || e.hp <= 0) {
           metaRef.current.finished = true;
           const victory = e.hp <= 0;
           const loserX = victory ? e.x : p.x;
@@ -1687,6 +1759,9 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             recoilHealthLoss: metaRef.current.recoilHealthLoss,
             recoilLifespanYears: metaRef.current.recoilLifespanYears,
             hpRemainingRatio: p.hp / p.maxHp,
+            endedBy: (victory ? metaRef.current.fatalDealt : metaRef.current.fatalTaken) > 0 ? 'FATAL' : 'KO',
+            fatalWoundsTaken: metaRef.current.fatalTaken,
+            fatalWoundsDealt: metaRef.current.fatalDealt,
           };
           setCommentary(victory ? `승부 결정! 【${p.sectTitle}】 ${p.name}의 승리!` : `승부 결정! ${e.name}에게 쓰러졌다…`);
           setTimeout(() => {
@@ -1843,8 +1918,8 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             const shiver = now < f.hurtPoseUntil && now < metaRef.current.hitstopUntil && f.hp > 0 ? (Math.floor(now / 34) % 2 === 0 ? 2 : -2) : 0;
             const drawX = Math.round(f.x + f.lungeOffset + f.recoilOffset + shiver);
 
-            // ★ 패배(HP <= 0) 시 실제 바닥에 쓰러진 KO 스프라이트(grid_ko_fallen_4x2.jpg) 렌더링! ★
-            if (f.hp <= 0) {
+            // ★ 패배(HP <= 0) 또는 항복 시 실제 바닥에 쓰러진/무릎 꿇은 KO 스프라이트(grid_ko_fallen_4x2.jpg) 렌더링! ★
+            if (f.hp <= 0 || f.yielded) {
               const koSheet = getGridSpriteSheet('/assets/grid_ko_fallen_4x2.jpg', 4, 2);
               ctx.fillStyle = 'rgba(10, 8, 5, 0.55)';
               ctx.beginPath();
@@ -2631,11 +2706,31 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             </div>
           )}
 
-          {battle.isRealDuel && (
+          {battle.isRealDuel ? (
             <div className="bg-[#4a1212] border border-[#ef4444] p-2.5 text-xs text-[#fecaca]">
-              ⚠ 진검결투: 패배 시 즉사 또는 영구 장애(외팔·실명) 위험!
+              {battle.journeyStakes === 'MERCY' ? (
+                <>
+                  ⚠ 진검승부: 한 칼이 무겁고 항복은 없습니다. 다만 상대에게 살의는 없어 급소를 노리지 않습니다.
+                  <br />져도 목숨은 건지지만 크게 다치고 무사수행을 접습니다.
+                </>
+              ) : battle.journeyStakes === 'HOSTILE' && getDifficultyId(state) === 'EASY' ? (
+                <>
+                  ⚠ 진검결투: 상대는 목숨을 노립니다. 깨끗이 들어간 일격은 치명상이 되고, 항복은 없습니다.
+                  <br />지면 크게 다치고 무사수행을 접습니다(영구 장애 위험).
+                </>
+              ) : (
+                <>
+                  ⚠ 진검결투: 한 칼이 무겁고, 깨끗이 들어간 일격은 치명상이 됩니다. 항복은 없습니다.
+                  <br />패배 시 즉사 또는 영구 장애(외팔·실명), 이겨도 깊은 상처가 남을 수 있습니다.
+                  {battle.journeyStakes === 'HOSTILE' && ' 지면 무사수행을 접습니다.'}
+                </>
+              )}
             </div>
-          )}
+          ) : !battle.spectatorMode ? (
+            <div className="bg-[#1f2a36] border border-[#5b7a99] p-2.5 text-xs text-[#cbd5e1]">
+              목검 비무: 타격이 가벼워 쓰러지기 전에 먼저 무릎 꿇는 쪽이 집니다(항복). 후유증은 멍 정도입니다.
+            </div>
+          ) : null}
 
           {/* 나와 상대방의 6대 능력치 한눈에 비교 보드! */}
           <div className="bg-[#1b120c] border border-[#6b4728] p-2.5 space-y-1.5">
@@ -2797,9 +2892,17 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
                 {battle.spectatorMode
                   ? `${resultOutcome.victory ? p?.name : e?.name}의 승리! 두 절정 고수의 초식에서 깊은 깨달음을 얻었다.`
                   : resultOutcome.victory
-                  ? `【${p?.sectTitle}】 ${p?.name}의 무술이 상대를 제압했다! (간파 ${resultOutcome.justParriesCount}회)`
+                  ? resultOutcome.endedBy === 'SURRENDER'
+                    ? `${e?.name}이(가) 목검을 내려놓고 항복했다! (간파 ${resultOutcome.justParriesCount}회)`
+                    : resultOutcome.endedBy === 'FATAL'
+                    ? `칼끝이 급소를 갈랐다. 【${p?.sectTitle}】 ${p?.name}의 일격이 승부를 끝냈다.${(resultOutcome.fatalWoundsTaken || 0) > 0 ? ' 그러나 깊은 검상을 입었다.' : ''}`
+                    : `【${p?.sectTitle}】 ${p?.name}의 무술이 상대를 제압했다! (간파 ${resultOutcome.justParriesCount}회)${(resultOutcome.fatalWoundsTaken || 0) > 0 ? ' 그러나 깊은 검상을 입었다.' : ''}`
                   : battle.isRealDuel
-                  ? '진검결투에서 쓰러졌다… 운명의 판정이 기다린다.'
+                  ? resultOutcome.endedBy === 'FATAL'
+                    ? '급소를 베였다… 진검결투에서 쓰러졌다. 운명의 판정이 기다린다.'
+                    : '진검결투에서 쓰러졌다… 운명의 판정이 기다린다.'
+                  : resultOutcome.endedBy === 'SURRENDER'
+                  ? `더는 버틸 수 없어 목검을 내려놓고 항복했다.${battle.isTournament ? ` ${battle.title} 탈락.` : ''}`
                   : battle.isTournament
                   ? `${battle.title}에서 아쉽게 패배했다.`
                   : '아쉬운 패배였다. 초식을 더 갈고닦자.'}

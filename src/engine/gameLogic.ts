@@ -45,7 +45,11 @@ import {
   BOOK_SKILL_TEMPLATES,
   createBaseSkills,
   evaluateCraft,
+  isAtMasteryWall,
   MASTERY_EXP_REQ,
+  MASTERY_WALL_LEVEL,
+  TRANSCEND_SUMMARY,
+  transcendSkill,
 } from '../data/booksAndSkills';
 import { ALL_WEAPONS_CATALOG, getStartingWeapons, getWeaponById } from '../data/weapons';
 import {
@@ -62,6 +66,8 @@ import { getTrainingMult } from '../data/temperament';
 import { adjustRelation, applySectBattleFollowup, resolveSectEvent, settleDisciplesAndSects, syncRivalSect } from './sectLogic';
 
 import { addLog } from './log';
+import { applyJourneyBattle, applyJourneyDefeat, isJourneyEvent, pickDueHomeEcho, pickHomeEvent, resolveJourneyEvent } from './journey';
+import { applyTourneyBattle, startTourney } from './tourney';
 export { addLog };
 
 export function createNewGame(
@@ -326,6 +332,8 @@ export function getMaxPassiveSlots(qi: number): number {
   return qi >= 50 ? 2 : 1;
 }
 
+// 수련·사건·대련으로 얻는 숙련은 Lv.9(입신)에서 멈춘다. Lv.9 숙련이 가득 차면 "벽"이고,
+// 그 너머 Lv.10 극의는 폐관수련의 돌파(transcendSkill)로만 연다.
 export function gainSkillExp(skill: Skill, amount: number): { updated: Skill; leveledUp: boolean; triggeredTrait?: 3 | 6 | 9 } {
   if (skill.masteryLevel >= 10) return { updated: skill, leveledUp: false };
   let lv = skill.masteryLevel;
@@ -333,7 +341,7 @@ export function gainSkillExp(skill: Skill, amount: number): { updated: Skill; le
   let leveledUp = false;
   let triggeredTrait: 3 | 6 | 9 | undefined;
 
-  while (lv < 10 && exp >= MASTERY_EXP_REQ[lv]) {
+  while (lv < MASTERY_WALL_LEVEL && exp >= MASTERY_EXP_REQ[lv]) {
     exp -= MASTERY_EXP_REQ[lv];
     lv += 1;
     leveledUp = true;
@@ -346,7 +354,7 @@ export function gainSkillExp(skill: Skill, amount: number): { updated: Skill; le
     updated: {
       ...skill,
       masteryLevel: lv,
-      masteryExp: lv >= 10 ? 0 : exp,
+      masteryExp: lv >= MASTERY_WALL_LEVEL ? Math.min(exp, MASTERY_EXP_REQ[MASTERY_WALL_LEVEL]) : exp,
       pendingTraitTier: triggeredTrait || skill.pendingTraitTier,
     },
     leveledUp,
@@ -391,7 +399,9 @@ export function performPersonalTraining(state: GameState, skillId: string): Game
 
   next = addLog(
     next,
-    `「${updated.customName || updated.name}」을(를) 집중 연마했다. (숙련도 +${expGain}${leveledUp ? ` → Lv.${updated.masteryLevel} 경지 돌파!` : ''})`,
+    isAtMasteryWall(updated)
+      ? `「${updated.customName || updated.name}」을(를) 휘둘러 보았으나 더는 늘지 않는다. 벽(壁)에 부딪혔다 — 폐관수련으로만 넘을 수 있다.`
+      : `「${updated.customName || updated.name}」을(를) 집중 연마했다. (숙련도 +${expGain}${leveledUp ? ` → Lv.${updated.masteryLevel} 경지 돌파!` : ''})`,
     leveledUp ? 'GOOD' : 'NORMAL'
   );
   return next;
@@ -655,7 +665,13 @@ export function applyImprintedTrait(state: GameState, skillId: string, trait: Im
 
   const target = nextSkills.find((s) => s.id === skillId);
   let next: GameState = { ...state, skills: nextSkills, pendingTraitSkillId: null };
-  next = addLog(next, `「${target?.customName || target?.name}」에 ${trait.tier}단계 각인 【${trait.label}】을 새겼다!`, 'GOOD');
+  next = addLog(
+    next,
+    trait.tier === 10
+      ? `「${target?.customName || target?.name}」에 극의 각인 ${trait.label}을 새겼다!`
+      : `「${target?.customName || target?.name}」에 ${trait.tier}단계 각인 【${trait.label}】을 새겼다!`,
+    trait.tier === 10 ? 'MAGIC' : 'GOOD'
+  );
   return next;
 }
 
@@ -795,13 +811,18 @@ export function teachSkillToDisciple(state: GameState, discipleId: string, skill
     logText = `${d.name}에게 「${masterSkill.customName || masterSkill.name}」을 전수했으나, 영력 부족으로 「${transferred.name}」으로 열화되어 계승되었다.`;
     logType = 'WARN';
   } else {
+    // 극의에 이른 초식은 원리까지 꿰뚫고 있어 훨씬 깊이 가르칠 수 있다 (Lv.6 · 각인 2개까지).
+    const isTranscended = masterSkill.masteryLevel >= 10;
     transferred = {
       ...masterSkill,
-      masteryLevel: Math.max(1, Math.floor(masterSkill.masteryLevel * 0.4)),
+      masteryLevel: isTranscended ? 6 : Math.max(1, Math.floor(masterSkill.masteryLevel * 0.4)),
       masteryExp: 0,
-      imprintedTraits: masterSkill.imprintedTraits.slice(0, 1),
+      imprintedTraits: masterSkill.imprintedTraits.filter((t) => t.tier < 10).slice(0, isTranscended ? 2 : 1),
+      pendingTraitTier: undefined,
     };
-    logText = `${d.name}에게 「${masterSkill.customName || masterSkill.name}」을 온전히 전수했다!`;
+    logText = isTranscended
+      ? `${d.name}에게 극의에 이른 「${masterSkill.customName || masterSkill.name}」의 요체를 전수했다! (Lv.6 계승)`
+      : `${d.name}에게 「${masterSkill.customName || masterSkill.name}」을 온전히 전수했다!`;
   }
 
   const nextDisciples = [...state.disciples];
@@ -1093,7 +1114,7 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
 
   // 9. 계절 스토리/역사/도장깨기 이벤트 발생 (PM2 실시간 타임라인 모드에서는 계절 진행 도중 별도 호출!)
   if (triggerEvent) {
-    const ev = pickSeasonalEvent(next);
+    const ev = pickDueHomeEcho(next) || pickSeasonEventMixed(next);
     if (ev) {
       next.activeEvent = ev;
     }
@@ -1104,7 +1125,23 @@ export function advanceSeason(state: GameState, triggerEvent = true): GameState 
 
 // PM2 타임라인 진행 도중 주요 스토리·도장깨기·인연 이벤트 추출!
 export function rollMidSeasonEvent(state: GameState): ActiveEvent | null {
-  return pickSeasonalEvent(state);
+  // 무사수행에서 남긴 메아리가 때가 되었으면 그것이 먼저 도장 대문을 두드린다.
+  return pickDueHomeEcho(state) || pickSeasonEventMixed(state);
+}
+
+// 정해진 이야기(라이벌·가족·역사·대회 등)는 그대로 두고, 우연에 맡기던 자리에는 생성형 사건을 섞는다.
+// 고정된 일회성 사건이 바닥나도 계절마다 다른 사람·다른 사연이 찾아온다.
+const RANDOM_POOL_PREFIX = ['random_', 'life_', 'duel_british', 'duel_mongol', 'duel_henri'];
+function pickSeasonEventMixed(state: GameState): ActiveEvent | null {
+  const fixed = pickSeasonalEvent(state);
+  const replaceable = !fixed || RANDOM_POOL_PREFIX.some((p) => fixed.id.startsWith(p));
+  if (!replaceable) return fixed;
+  const gen = pickHomeEvent(state);
+  if (!gen) return fixed;
+  if (!fixed) return Math.random() < 0.45 ? gen : null;
+  // 이미 본 고정 사건의 되풀이(도장깨기·새벽 깨달음 등)보다는 새 사연을 더 자주
+  const stale = fixed.id.startsWith('random_') || (state.flags.recentEventBases || []).some((b) => fixed.id.startsWith(b));
+  return Math.random() < (stale ? 0.7 : 0.45) ? gen : fixed;
 }
 
 // 이벤트 선택지 처리기
@@ -1133,6 +1170,9 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
   // 제곱근 완만 성장 곡선 + 난이도별 명확한 전투 강도 격차!
   const baseScale = Math.min(3.15, 0.72 + Math.sqrt(Math.max(1, state.turn)) * 0.165 + Math.sqrt(Math.max(0, state.fame)) * 0.028);
   const scale = Math.min(4.2, baseScale * diffCfg.enemyScaleMult);
+
+  // 무사수행 길 위의 사건과, 그 메아리가 도장으로 돌아온 사건
+  if (isJourneyEvent(event)) return resolveJourneyEvent(next, event, optionId);
 
   // 타 문파 사건 · 문하생 말썽 · 반란, 그리고 기존 이벤트에 끼어드는 문파의 선택지는 따로 처리한다.
   const sectHandled = resolveSectEvent(next, event, optionId, scale);
@@ -1529,17 +1569,12 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       next.phase = 'BATTLE';
       return next;
 
-    case 'tourney_enter': {
-      next.pendingBattle = createTournamentBattle(next, 1); // 256강 예선 1회전부터 출발!
-      next.phase = 'BATTLE';
-      return next;
-    }
-    case 'tourney_watch': {
-      // 객석 관전 모드: 8강(6) → 4강 천하4검(7) → 결승(8) 초절정 고수 비무 직접 감상!
-      next.pendingBattle = createTournamentSpectatorBattle(next, 6);
-      next.phase = 'BATTLE';
-      return next;
-    }
+    case 'tourney_enter':
+      // 256강 예선 네 판 → 본선 16강 실제 대진표 (다른 고수들의 경기도 실제로 승부가 갈린다)
+      return startTourney(next, 'ENTER');
+    case 'tourney_watch':
+      // 객석에서 대진표 전체를 지켜본다 — 보고 싶은 경기는 직접 관전할 수 있다
+      return startTourney(next, 'WATCH');
 
     case 'gm1_spar':
     case 'gm1_real': {
@@ -2549,6 +2584,118 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
 // v3.0 프린세스 메이커식 계절 계획 (1/n 배분) 실행 엔진
 // =========================================================================
 
+// ───────────────────────── 폐관수련(閉關修鍊) ─────────────────────────
+// 계절 하나를 통째로 써서 관문을 닫고 초식 하나만 붙든다. 계절을 이어 폐관할수록 깨달음이 쌓이고,
+// Lv.9 벽에 닿은 초식이 깨달음 100에 이르면 극의 돌파를 시도한다. 실패하면 주화입마.
+
+// 이번 계절 폐관 대상 초식. 계획에 고른 초식이 없거나 이미 극의라면 벽에 닿은 초식 → 가장 높은 초식 순으로 고른다.
+export function getSeclusionTargetId(state: GameState): string {
+  const planned = state.seasonPlan.seclusionSkillId;
+  if (planned && state.skills.some((s) => s.id === planned && s.masteryLevel < 10)) return planned;
+  const wall = state.skills.find((s) => isAtMasteryWall(s));
+  if (wall) return wall.id;
+  const open = [...state.skills]
+    .filter((s) => s.masteryLevel < 10)
+    .sort((a, b) => b.masteryLevel - a.masteryLevel || b.masteryExp - a.masteryExp)[0];
+  return open?.id || '';
+}
+
+// 지난 계절에 같은 초식으로 폐관했다면 이번 계절은 "이어지는" 폐관이다.
+export function isSeclusionContinuing(state: GameState, skillId: string): boolean {
+  const sec = state.seclusion;
+  return !!sec && sec.skillId === skillId && sec.lastTurn === state.turn - 1;
+}
+
+// 이번 계절을 시작할 때 이어받는 깨달음. 같은 초식이라도 관을 나섰다 오면 절반이 흩어진다.
+function carriedInsight(state: GameState, skillId: string): number {
+  const sec = state.seclusion;
+  if (!sec || sec.skillId !== skillId) return 0;
+  return isSeclusionContinuing(state, skillId) ? sec.insight : Math.floor(sec.insight * 0.5);
+}
+
+// 한 계절 폐관으로 쌓이는 깨달음(평균). 정신·통찰·영력과 특수 수련장이 받쳐 준다.
+// 기준: 중년의 평범한 고수(정신 60·통찰 60·영력 50·수련장 2단계)가 약 3계절에 100에 닿는다.
+export function getSeclusionInsightPerSeason(state: GameState): number {
+  const st = state.stats;
+  const ageMult = state.age < 25 ? 0.8 : state.age >= 60 ? 1.15 : 1.0;
+  const healthMult = state.health < 40 ? 0.6 : 1.0;
+  const injuryMult = state.statuses.some((x) => x.id === 'HEAVY_INJURY' || x.id === 'INTERNAL_INJURY') ? 0.5 : 1.0;
+  const base = 14 + st.wil * 0.12 + st.ins * 0.08 + st.qi * 0.06 + (state.facilities.sanctum - 1) * 4;
+  return Math.max(8, Math.round(base * ageMult * healthMult * injuryMult));
+}
+
+// 깨달음이 가득 찬 뒤 벽을 깨뜨릴 확률. 극의는 일생을 걸어도 닿을까 말까 한 경지라, 한 번 두드려 열릴 확률은 반반 남짓이다.
+// 금기·이계 초식은 반동이 크고, 쇠약한 몸은 버티지 못한다.
+export function getBreakthroughChance(state: GameState, skill: Skill): number {
+  let c = 0.38 + state.stats.wil * 0.002 + (state.facilities.sanctum - 1) * 0.03;
+  if (skill.isForbidden) c -= 0.15;
+  if (skill.origin.includes('FANTASY')) c -= 0.06;
+  if (state.health < 40) c -= 0.12;
+  // 극의는 세상에 하나뿐인 경지 — 이미 극의를 이룬 초식이 있으면 다음 벽은 훨씬 두껍다.
+  const already = state.skills.filter((s) => s.masteryLevel >= 10).length;
+  const repeatMult = TRANSCEND_REPEAT_MULT[Math.min(TRANSCEND_REPEAT_MULT.length - 1, already)];
+  return Math.max(0.2, Math.min(0.72, c)) * repeatMult;
+}
+
+// 첫 극의 ×1, 두 번째 ×0.25, 세 번째 ×0.1, 그 너머 ×0.05
+export const TRANSCEND_REPEAT_MULT = [1, 0.25, 0.1, 0.05];
+
+// 돌파에 실패하면 깨달음이 이만큼으로 물러난다 (다시 두드리려면 한두 계절이 더 든다).
+export const SECLUSION_FAIL_INSIGHT = 50;
+// 실패 가운데 내력이 뒤틀려 주화입마로 번지는 비율. 나머지는 벽 앞에서 물러나는 데 그친다.
+export const SECLUSION_DEVIATION_ON_FAIL = 0.4;
+
+export interface SeclusionPreview {
+  skill: Skill | null;
+  atWall: boolean;
+  continuing: boolean;
+  seasonNo: number; // 이번이 연속 몇 번째 폐관 계절인가
+  insight: number; // 이번 계절 시작 시 깨달음
+  lostInsight: number; // 관을 나섰다 와서 흩어지는 깨달음
+  perSeason: number;
+  seasonsToFull: number;
+  chance: number;
+}
+
+export function getSeclusionPreview(state: GameState, skillId?: string): SeclusionPreview {
+  const id = skillId || getSeclusionTargetId(state);
+  const skill = state.skills.find((s) => s.id === id) || null;
+  const continuing = !!skill && isSeclusionContinuing(state, id);
+  const insight = skill ? carriedInsight(state, id) : 0;
+  const prevSame = state.seclusion && state.seclusion.skillId === id ? state.seclusion.insight : 0;
+  const perSeason = getSeclusionInsightPerSeason(state);
+  return {
+    skill,
+    atWall: !!skill && isAtMasteryWall(skill),
+    continuing,
+    seasonNo: continuing ? (state.seclusion?.seasons || 0) + 1 : 1,
+    insight,
+    lostInsight: Math.max(0, prevSame - insight),
+    perSeason,
+    seasonsToFull: insight >= 100 ? 0 : Math.ceil((100 - insight) / perSeason),
+    chance: skill ? getBreakthroughChance(state, skill) : 0,
+  };
+}
+
+const SECLUSION_FLAVOR: Record<'EARLY' | 'MID' | 'LATE', string[]> = {
+  EARLY: [
+    '벽을 마주 보고 앉았다. 제 숨소리마저 거슬린다.',
+    '관문에 빗장을 걸자 바깥의 소리가 하나씩 멀어졌다.',
+    '하루 한 끼 주먹밥만 문틈으로 들어온다.',
+  ],
+  MID: [
+    '같은 초식을 머릿속으로만 만 번 휘둘렀다.',
+    '돌아가신 스승의 목소리가 환청처럼 들렸다 사라진다.',
+    '검로 하나하나가 낯설어졌다가, 다시 익숙해진다.',
+    '꿈속에서 숙적과 백 합을 겨루고 깨어났다.',
+  ],
+  LATE: [
+    '촛불 심지가 다 타도록 눈을 감고 있었다.',
+    '손끝에 닿는 바람결이 어제와 다르다.',
+    '관문 밖에서 제자들의 기합 소리가 아득하게 들려온다.',
+  ],
+};
+
 export function getBookDecodeTarget(book: Book): number {
   if (book.decodeApRequired <= 0) return 0;
   if (book.rarity === 'GRIMOIRE') return 260;
@@ -2626,6 +2773,10 @@ export function executeScheduleActivity(
         text: `[${phaseLabel}] 「${updated.customName || updated.name}」 연마 (EXP +${expGain}${leveledUp ? ` → Lv.${updated.masteryLevel} 돌파!` : ''}${aliveCount > 0 ? ` · 문하생 ${aliveCount}명 동반 성장` : ''})`,
         tone: leveledUp ? 'GOOD' : 'NORMAL',
       });
+      if (isAtMasteryWall(updated)) {
+        floatingText = '벽(壁)';
+        feedLines.push({ text: `  ↳ 더는 늘지 않는다. 벽에 부딪혔다 — 폐관수련으로만 극의에 이를 수 있다.`, tone: 'WARN' });
+      }
     }
   } else if (activity === 'BODY') {
     location = 'YARD';
@@ -2955,6 +3106,153 @@ export function executeScheduleActivity(
     floatingText = `♥ +${heal}`;
     floatingColor = '#34d399';
     feedLines.push({ text: `[${phaseLabel}] 약방 휴식 및 치료 (건강 +${heal})`, tone: 'GOOD' });
+  } else if (activity === 'SECLUSION') {
+    location = 'HALL';
+    // 같은 계절 안에서는 처음 정한 대상을 끝까지 붙든다 (중간에 극의를 이뤄도 대상이 바뀌지 않게).
+    const sameSeason = next.seclusion && next.seclusion.lastTurn === next.turn ? next.seclusion : null;
+    const skId = sameSeason ? sameSeason.skillId : getSeclusionTargetId(next);
+    const idx = next.skills.findIndex((s) => s.id === skId);
+    if (idx !== -1) {
+      if (!sameSeason) {
+        const continuing = isSeclusionContinuing(next, skId);
+        const prev = next.seclusion;
+        const carried = carriedInsight(next, skId);
+        if (prev && prev.skillId === skId && !continuing && prev.insight - carried >= 5) {
+          feedLines.push({ text: `  ↳ 관을 나섰던 사이 쌓아 둔 깨달음이 반쯤 흩어졌다 (깨달음 ${prev.insight}% → ${carried}%)`, tone: 'WARN' });
+        }
+        const seasons = continuing && prev ? prev.seasons + 1 : 1;
+        next.seclusion = { skillId: skId, insight: carried, seasons, lastTurn: next.turn };
+        const sk0 = next.skills[idx];
+        feedLines.push({
+          text: `[${phaseLabel}] 관문을 닫았다. 「${sk0.customName || sk0.name}」 하나만을 붙들고 폐관 ${seasons}계절째에 든다.`,
+          tone: 'MAGIC',
+        });
+      }
+
+      const sec = next.seclusion!;
+      const sk = next.skills[idx];
+      const skName = sk.customName || sk.name;
+
+      if (sk.masteryLevel >= 10) {
+        // 극의를 이룬 뒤 남은 시간은 깨달음을 갈무리하는 데 쓴다.
+        next.stats.wil += 1;
+        next.stats.qi += 1;
+        floatingText = '극의 갈무리';
+        floatingColor = '#c084fc';
+        feedLines.push({ text: `[${phaseLabel}] 「${skName}」의 극의를 갈무리하며 마음을 가라앉힌다 (정신 +1, 영력 +1)`, tone: 'MAGIC' });
+      } else {
+        const facMult = 1 + (next.facilities.sanctum - 1) * 0.1;
+        // 깨달음이 가득 찼는데 아직 벽에 닿지 않았다면, 넘치는 깨달음이 숙련으로 흘러든다.
+        const overflowMult = sec.insight >= 100 && !isAtMasteryWall(sk) ? 1.6 : 1.0;
+        const expGain = Math.max(8, Math.round(110 * eff * 0.75 * facMult * overflowMult));
+        const { updated, leveledUp, triggeredTrait } = gainSkillExp(sk, expGain);
+        const nextSkills = [...next.skills];
+        nextSkills[idx] = updated;
+        next.skills = nextSkills;
+        if (triggeredTrait) next.pendingTraitSkillId = updated.id;
+
+        const insightGain = Math.max(3, Math.round(getSeclusionInsightPerSeason(next) * eff * (0.75 + Math.random() * 0.5)));
+        let insight = Math.min(100, sec.insight + insightGain);
+
+        if (Math.random() < 0.75) next.stats.wil += 1;
+        if (Math.random() < 0.7) next.stats.qi += 1;
+        if (Math.random() < 0.5) next.stats.ins += 1;
+        next.reputation.ascetic += Math.max(1, Math.round(3 * eff));
+
+        floatingText = `깨달음 ${insight}%`;
+        floatingColor = '#c084fc';
+        feedLines.push({
+          text: `[${phaseLabel}] 폐관 중 「${skName}」의 구결을 되새긴다 (깨달음 ${sec.insight}% → ${insight}%, EXP +${expGain}${leveledUp ? ` → Lv.${updated.masteryLevel} 돌파!` : ''})`,
+          tone: leveledUp ? 'GOOD' : 'MAGIC',
+        });
+        if (Math.random() < 0.5) {
+          const pool = SECLUSION_FLAVOR[phase];
+          feedLines.push({ text: `  ↳ ${pool[Math.floor(Math.random() * pool.length)]}`, tone: 'NORMAL' });
+        }
+
+        // 가벼운 주화입마 — 금기·이계 초식이나 쇠약한 몸일수록 기혈이 엇나간다.
+        const deviationRisk =
+          (0.012 + (sk.isForbidden ? 0.05 : 0) + (sk.origin.includes('FANTASY') ? 0.025 : 0) + (next.health < 35 ? 0.03 : 0)) *
+          Math.max(0.4, 1 - next.stats.wil / 150);
+        if (Math.random() < deviationRisk) {
+          const hurt = 8 + Math.floor(Math.random() * 7);
+          next.health = Math.max(1, next.health - hurt);
+          insight = Math.max(0, insight - 20);
+          if (!next.statuses.some((x) => x.id === 'INTERNAL_INJURY')) {
+            next.statuses = [...next.statuses, { id: 'INTERNAL_INJURY', label: '내상', turnsRemaining: 2 }];
+          }
+          feedLines.push({ text: `  ↳ ⚠ 기혈이 거꾸로 치솟았다! 가벼운 주화입마 (건강 -${hurt}, 깨달음 -20)`, tone: 'WARN' });
+        }
+        next.seclusion = { ...sec, insight };
+
+        // 극의 돌파 판정 — Lv.9 벽에 닿은 초식이 깨달음 100에 이르면 벽을 두드린다.
+        const cur = next.skills[idx];
+        if (insight >= 100 && isAtMasteryWall(cur)) {
+          const chance = getBreakthroughChance(next, cur);
+          if (Math.random() < chance) {
+            const transcended = transcendSkill(cur);
+            const copy = [...next.skills];
+            copy[idx] = transcended;
+            next.skills = copy;
+            next.pendingTraitSkillId = transcended.id;
+            next.seclusion = { ...sec, insight: 0 };
+            next.stats.wil += 3;
+            next.stats.qi += 3;
+            next.stats.ins += 3;
+            next.fame += 40;
+            floatingText = '극의 돌파!';
+            floatingColor = '#f0abfc';
+            feedLines.push({
+              text: `★ 벽이 무너졌다! 「${skName}」 극의(極意) 돌파 — ${TRANSCEND_SUMMARY}`,
+              tone: 'MAGIC',
+            });
+            next = addLog(next, `폐관 ${sec.seasons}계절 만에 벽이 무너졌다. 「${skName}」이(가) 극의(極意)에 이르렀다!`, 'MAGIC');
+          } else if (Math.random() >= SECLUSION_DEVIATION_ON_FAIL) {
+            // 벽이 흔들렸으나 무너지지 않았다 — 몸은 멀쩡하지만 깨달음이 물러난다.
+            next.seclusion = { ...sec, insight: SECLUSION_FAIL_INSIGHT };
+            floatingText = '벽이 버텼다';
+            floatingColor = '#a78bfa';
+            feedLines.push({
+              text: `✖ 벽이 흔들렸으나 끝내 무너지지 않았다. 손에 잡힐 듯하던 깨달음이 멀어진다 (깨달음 ${SECLUSION_FAIL_INSIGHT}%로 후퇴)`,
+              tone: 'WARN',
+            });
+            next = addLog(next, `「${skName}」의 벽을 두드렸으나 열리지 않았다. 관문 안에서 다시 마음을 다잡는다.`, 'WARN');
+          } else {
+            const hurt = Math.round((12 + Math.random() * 10) * Math.max(0.6, 1 - next.stats.wil / 200));
+            next.health = Math.max(0, next.health - hurt);
+            next.maxLifespanPenalty += 1;
+            next.statuses = [
+              ...next.statuses.filter((x) => x.id !== 'INTERNAL_INJURY'),
+              { id: 'INTERNAL_INJURY', label: '내상', turnsRemaining: 3 },
+            ];
+            next.seclusion = { ...sec, insight: Math.max(0, SECLUSION_FAIL_INSIGHT - 20) };
+            floatingText = '주화입마!';
+            floatingColor = '#f43f5e';
+            feedLines.push({
+              text: `✖ 벽 앞에서 내력이 뒤틀렸다! 주화입마 — 건강 -${hurt}, 수명 -1년, 깨달음 ${Math.max(0, SECLUSION_FAIL_INSIGHT - 20)}%로 후퇴`,
+              tone: 'WARN',
+            });
+            next = addLog(next, `「${skName}」의 벽을 깨려다 내력이 뒤틀려 주화입마에 빠졌다.`, 'DANGER');
+            if (next.health <= 0) {
+              next.phase = 'ENDING';
+              next.deathCause = '폐관 중 주화입마';
+              next = addLog(next, `${next.year}년 ${SEASON_META[next.season].label}, 닫힌 관문 안에서 향년 ${next.age}세로 숨을 거두었다.`, 'DANGER');
+            }
+          }
+        }
+      }
+
+      // 하순: 스승 없이 보낸 계절 — 문하생들이 서운해한다 (온순·강직한 제자는 덜하다).
+      if (phase === 'LATE' && aliveCount > 0 && next.phase === 'MAIN') {
+        next.disciples = next.disciples.map((d) => {
+          if (d.dead) return d;
+          const drop = d.temperament === 'GENTLE' || d.temperament === 'UPRIGHT' ? 1 : 2;
+          return { ...d, loyalty: Math.max(0, d.loyalty - drop) };
+        });
+        discipleBadgeText = `문하생 ${aliveCount}명 스승 부재`;
+        feedLines.push({ text: `[${phaseLabel}] 문하생들은 닫힌 관문 앞에서 저희끼리 수련했다 (충성 -1~2)`, tone: 'NORMAL' });
+      }
+    }
   } else if (activity === 'SPAR') {
     location = 'GATE';
     triggerSparBattle = true;
@@ -3028,14 +3326,18 @@ export function executeScheduleActivity(
     next = addLog(next, ev.text, ev.tone === 'MAGIC' ? 'MAGIC' : ev.tone === 'WARN' ? 'WARN' : ev.tone === 'GOOD' ? 'GOOD' : 'NORMAL');
   };
 
-  if (Math.random() < 0.55) rollMinor(activity);
-  if (phase === 'LATE' && Math.random() < 0.45) rollMinor(undefined);
+  // 폐관 중에는 바깥 일이 닿지 않는다.
+  if (activity !== 'SECLUSION') {
+    if (Math.random() < 0.55) rollMinor(activity);
+    if (phase === 'LATE' && Math.random() < 0.45) rollMinor(undefined);
+  }
 
   next.stats = clampStatsByAge(next.stats, next.age);
 
   // PM2 활동 연출 카드용 명확한 변동 뱃지 자동 집계!
   const badges: Array<{ label: string; tone: 'GOOD' | 'WARN' | 'MAGIC' }> = [];
   if (floatingText && activity === 'TRAIN') badges.push({ label: floatingText, tone: 'GOOD' });
+  if (floatingText && activity === 'SECLUSION') badges.push({ label: floatingText, tone: floatingColor === '#f43f5e' ? 'WARN' : 'MAGIC' });
   if (floatingText && (activity === 'DECODE' || activity === 'CRAFT' || activity === 'TEACH' || activity === 'BUILD')) {
     badges.push({ label: floatingText, tone: floatingColor === '#f87171' ? 'WARN' : 'MAGIC' });
   }
@@ -3085,6 +3387,11 @@ export interface BattleOutcomePayload {
   recoilHealthLoss: number;
   recoilLifespanYears: number;
   hpRemainingRatio: number;
+  /** 결착 방식: 쓰러뜨림 / (목검) 항복 / (진검) 치명상 / 시간 종료 판정 */
+  endedBy?: import('./duelRules').DuelEnding;
+  /** 진검결투에서 내가 입은 / 상대에게 입힌 치명상 수 */
+  fatalWoundsTaken?: number;
+  fatalWoundsDealt?: number;
 }
 
 // 실시간 전투 종료 후 상태 정산
@@ -3114,6 +3421,20 @@ export function repairPhantomMagicRecord(state: GameState): GameState {
 }
 
 export function applyBattleOutcome(state: GameState, outcome: BattleOutcomePayload): GameState {
+  const battle = state.pendingBattle;
+  // 무사수행 길 위에서 진 승부는 도장의 패배 정산(현판 탈취·진검 사망 판정)이 아니라 무사수행의 규칙으로 처리한다.
+  if (battle?.eventFollowupId?.startsWith('journey|') && state.journey && !outcome.victory) {
+    return applyJourneyDefeat(state, battle, outcome);
+  }
+  const next = applyBattleOutcomeWithSects(state, outcome);
+  // 무사수행 비무(그리고 도장으로 돌아온 메아리의 비무)는 사건 정의가 뒷이야기를 잇는다.
+  if (battle?.eventFollowupId?.startsWith('journey|')) return applyJourneyBattle(next, battle, outcome.victory);
+  // 천하제일 무술대회 대진표
+  if (battle?.eventFollowupId?.startsWith('tourney2|')) return applyTourneyBattle(next, battle, outcome.victory);
+  return next;
+}
+
+function applyBattleOutcomeWithSects(state: GameState, outcome: BattleOutcomePayload): GameState {
   const battle = state.pendingBattle;
   let after = applyBattleOutcomeCore(state, outcome);
   // 숙적과 칼을 맞대면 두 문파 사이도 팽팽해진다.
@@ -3166,6 +3487,8 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
 
   // ★ 천하제일 무술대회 객석 관전 모드 처리 (8강 → 4강 → 결승 감상 후 깨달음 보상!) ★
   if (battle.spectatorMode) {
+    // 새 대진표의 관전 경기는 대진표가 결과를 받는다 (여기서는 옛 관전 보상을 주지 않는다)
+    if (battle.eventFollowupId?.startsWith('tourney2|')) return next;
     const wins = next.flags.tournamentWins || 0;
     if (battle.eventFollowupId?.startsWith('tourney_spec_next|')) {
       const nextR = Number(battle.eventFollowupId.split('|')[1]) as 7 | 8;
@@ -3245,20 +3568,36 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
 
   const diffCfg = getDifficultyConfig(next);
   // ★ 결투 결과 HP 소모 → 건강(Health) 연동! (난이도가 높을수록 실전 부상 마모 가중!) ★
+  // 목검 비무는 멍과 타박상으로 끝나지만, 진검결투는 이겨도 몸에 칼자국이 남는다.
   const lostRatio = Math.max(0, Math.min(1, 1 - (outcome.hpRemainingRatio ?? 1)));
+  const fatalTaken = outcome.fatalWoundsTaken || 0;
+  const withStatus = (st: GameState, status: GameState['statuses'][number]): GameState => {
+    const prevSame = st.statuses.find((x) => x.id === status.id);
+    const turns = Math.max(status.turnsRemaining, prevSame?.turnsRemaining || 0);
+    return { ...st, statuses: [...st.statuses.filter((x) => x.id !== status.id), { ...status, turnsRemaining: turns }] };
+  };
   const applyBattleWear = (st: GameState): GameState => {
-    if (lostRatio < 0.08) return st;
-    const maxWear = (battle.isRealDuel ? 32 : battle.isTournament ? 20 : 24) * diffCfg.battleWearMult;
-    const wear = Math.max(2, Math.round(lostRatio * maxWear));
-    const nextHealth = Math.max(4, st.health - wear);
-    return { ...st, health: nextHealth };
+    if (battle.isRealDuel) {
+      const wear = Math.round((Math.max(4, lostRatio * 36) + fatalTaken * 10) * diffCfg.battleWearMult);
+      let out: GameState = { ...st, health: Math.max(4, st.health - wear) };
+      if (fatalTaken > 0 || lostRatio >= 0.55) {
+        out = withStatus(out, { id: 'HEAVY_INJURY', label: fatalTaken > 0 ? '깊은 검상(劍傷)' : '칼에 베인 중상', turnsRemaining: fatalTaken > 0 ? 3 : 2 });
+      } else if (lostRatio >= 0.2) {
+        out = withStatus(out, { id: 'LIGHT_INJURY', label: '칼에 베인 상처', turnsRemaining: 2 });
+      }
+      return out;
+    }
+    if (lostRatio < 0.15) return st;
+    const maxWear = (battle.isTournament ? 7 : 9) * diffCfg.battleWearMult;
+    const wear = Math.max(1, Math.round(lostRatio * maxWear));
+    return { ...st, health: Math.max(4, st.health - wear) };
   };
 
   // 주인공 직접 출전 결과
   if (outcome.victory) {
     next = applyBattleWear(next);
     const jpFameBonus = next.country === 'JAPAN' ? 1.2 : 1.0;
-    const fameGain = Math.round((battle.rewardFame || 20) * jpFameBonus * diffCfg.fameGainMult);
+    const fameGain = Math.round((battle.rewardFame ?? 20) * jpFameBonus * diffCfg.fameGainMult);
     const rewardCash = Math.round((battle.rewardMoney || 0) * diffCfg.incomeMult);
     next.fame += fameGain;
     next.money += rewardCash;
@@ -3380,7 +3719,14 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
     }
     next.disabilityProgress = prog;
 
-    return addLog(next, `「${battle.title}」 승리! (명성 +${fameGain}, 재화 +${battle.rewardMoney || 0})`, 'GOOD');
+    const howWon =
+      outcome.endedBy === 'SURRENDER'
+        ? ` ${battle.enemyName}이(가) 항복했다.`
+        : battle.isRealDuel && (outcome.fatalWoundsDealt || 0) > 0
+        ? ' 일격이 급소를 갈랐다.'
+        : '';
+    const scar = battle.isRealDuel && fatalTaken > 0 ? ' 대신 깊은 검상을 입었다.' : '';
+    return addLog(next, `「${battle.title}」 승리!${howWon}${scar} (명성 +${fameGain}, 재화 +${battle.rewardMoney || 0})`, 'GOOD');
   } else {
     // 패배 시에도 HP 전소 피로/부상 반영 (진검결투 즉사는 아래 분기에서 처리)
     next = applyBattleWear(next);
@@ -3402,7 +3748,7 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
         const gained = possibleDis[Math.floor(Math.random() * possibleDis.length)];
         next.disabilities = [...next.disabilities, gained];
         next.health = Math.max(12, next.health - 28);
-        next.statuses = [...next.statuses, { id: 'HEAVY_INJURY', label: '치명적 중상', turnsRemaining: 3 }];
+        next = withStatus(next, { id: 'HEAVY_INJURY', label: '치명적 중상', turnsRemaining: 3 });
         const label = gained === 'ONE_ARM' ? '왼팔 상실(외팔)' : gained === 'BLIND' ? '실명(두 눈 상실)' : '다리 장애';
         return addLog(next, `진검결투에서 패배했으나 구사일생으로 살아남았다… 대신 영구 장애 【${label}】를 입었다.`, 'DANGER');
       } else {
@@ -3426,10 +3772,11 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
       // 일반 비무 패배 (도장깨기 등)
       next.fame = Math.max(0, next.fame - 18);
       next.signboardStolen = !battle.isTutorial && !battle.isRivalBattle && !battle.id.startsWith('spar_');
-      next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '비무 타박상', turnsRemaining: 2 }];
+      next = withStatus(next, { id: 'LIGHT_INJURY', label: '비무 타박상', turnsRemaining: 1 });
+      const howLost = outcome.endedBy === 'SURRENDER' ? '목검을 내려놓고 항복했다' : '패배했다';
       return addLog(
         next,
-        `「${battle.title}」에서 패배했다. 명성이 하락하고 부상을 입었다.${next.signboardStolen ? ' 도장 현판을 빼앗겼다!' : ''}`,
+        `「${battle.title}」에서 ${howLost}. 명성이 하락하고 멍이 들었다.${next.signboardStolen ? ' 도장 현판을 빼앗겼다!' : ''}`,
         'WARN'
       );
     }
@@ -3478,6 +3825,18 @@ export function buildBattleConclusionNotice(
   if (!outcome.victory && next.signboardStolen && !prev.signboardStolen) {
     badges.push({ label: `현판 탈취당함`, tone: 'WARN' });
   }
+  // 목검 비무는 항복으로, 진검결투는 치명상으로 갈린다
+  if (outcome.endedBy === 'SURRENDER') {
+    badges.unshift({ label: outcome.victory ? '상대 항복' : '항복', tone: outcome.victory ? 'GOOD' : 'WARN' });
+  }
+  if (battle.isRealDuel && outcome.victory && (outcome.fatalWoundsDealt || 0) > 0) {
+    badges.unshift({ label: '일격 치명상', tone: 'MAGIC' });
+  }
+  if (battle.isRealDuel && outcome.victory && (outcome.fatalWoundsTaken || 0) > 0) {
+    badges.push({ label: '치명상을 입음', tone: 'WARN' });
+  }
+  const gotHeavy = next.statuses.some((s) => s.id === 'HEAVY_INJURY') && !prev.statuses.some((s) => s.id === 'HEAVY_INJURY');
+  if (outcome.victory && gotHeavy) badges.push({ label: '중상 (행동력↓ · 수련↓)', tone: 'WARN' });
 
   if (outcome.fighterType === 'DISCIPLE' && outcome.discipleId) {
     const d = next.disciples.find((x) => x.id === outcome.discipleId);
@@ -3668,11 +4027,26 @@ export function buildBattleConclusionNotice(
         badges: [{ label: '초식 숙련도↑', tone: 'GOOD' }, ...badges],
       };
     }
+    if (battle.isRealDuel) {
+      const scarLine =
+        (outcome.fatalWoundsTaken || 0) > 0
+          ? '\n이겼으나 옆구리를 가른 칼자국에서 피가 멎지 않는다. 한동안은 칼을 쥐기도 버거울 것이다.'
+          : (outcome.hpRemainingRatio ?? 1) < 0.5
+          ? '\n살아남았으나 온몸이 칼에 베인 상처투성이다.'
+          : '';
+      return {
+        title: `${battle.title} — 생사의 일합`,
+        speaker: battle.enemyName,
+        role: 'ENEMY',
+        body: `${(outcome.fatalWoundsDealt || 0) > 0 ? '칼끝이 급소를 가르는 순간 승부는 끝났다. ' : ''}${battle.enemyName}이(가) 피를 쏟으며 무너졌다.\n“……【${prev.sectName}】…… 진짜 칼이었군……”${scarLine}`,
+        badges,
+      };
+    }
     return {
       title: `${battle.title} — 완승`,
       speaker: battle.enemyName,
       role: 'ENEMY',
-      body: `${battle.enemyName}이(가) 무릎을 꿇고 꺾인 무기를 거두었다.\n${prevWins >= 1 || isElder ? `“……천하에 이름난 【${prev.sectName}】 대종사 앞에 감히 칼을 들었던 내 안목이 짧았소.”` : `“……【${prev.sectName}】의 이름은 헛된 소문이 아니었군. 오늘의 패배를 뼈에 새기겠소.”`}`,
+      body: `${battle.enemyName}이(가) ${outcome.endedBy === 'SURRENDER' ? '목검을 내려놓고 패배를 인정했다' : '무릎을 꿇고 꺾인 무기를 거두었다'}.\n${prevWins >= 1 || isElder ? `“……천하에 이름난 【${prev.sectName}】 대종사 앞에 감히 칼을 들었던 내 안목이 짧았소.”` : `“……【${prev.sectName}】의 이름은 헛된 소문이 아니었군. 오늘의 패배를 뼈에 새기겠소.”`}`,
       badges,
     };
   } else {

@@ -452,7 +452,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       ],
       options: [
         { id: 'gm1_spar', label: '목검으로 정중히 절정 고수에게 일합을 청한다 (고난도 비무)', hint: '승리 시 명성 +65 · 상금 +120 · 전설 비급 서적 1권!' },
-        { id: 'gm1_real', label: '진검을 뽑아 생사를 건 극의 대결을 청한다 (진검결투)', hint: '⚠ 진검결투 · 승리 시 명성 +120 · 명검 노획 · 통찰/영력 +6!' },
+        { id: 'gm1_real', label: '진검을 뽑아 생사를 건 대결을 청한다 (진검결투)', hint: '⚠ 진검결투 · 승리 시 명성 +120 · 명검 노획 · 통찰/영력 +6!' },
         { id: 'gm1_tea', label: '정중히 차를 올리며 검리만 논하고 배웅한다', hint: '통찰 +3 · 구도 +12' },
       ],
       meta: { gmName, gmSect },

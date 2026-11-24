@@ -20,8 +20,10 @@ import {
 import { PixelPortrait } from './PixelPortrait';
 import { AchievementsPanel } from './AchievementsModal';
 import { getSectTitleTooltip, HANJA_GLOSSARY, InGameSelect, InGameTooltip } from './InGameUI';
-import { MASTERY_EXP_REQ, MASTERY_NAMES } from '../data/booksAndSkills';
-import { getBookDecodeTarget } from '../engine/gameLogic';
+import { getMasteryPct, isAtMasteryWall, MASTERY_NAMES } from '../data/booksAndSkills';
+import { getBookDecodeTarget, getSeclusionPreview } from '../engine/gameLogic';
+import { regionsForCountry } from '../data/journeyRegions';
+import { defaultRegionFor } from '../engine/journey';
 import { sound } from '../engine/sound';
 import {
   BookOpen,
@@ -29,12 +31,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Coins,
+  DoorClosed,
   Dumbbell,
   FastForward,
   Hammer,
   Heart,
   Home,
   Minus,
+  Mountain,
   Play,
   Plus,
   ScrollText,
@@ -107,9 +111,29 @@ const ACTIVITY_META: Record<
   ESCORT: { label: '호위·생계', short: '호위', desc: '저잣거리 상단 호위와 의뢰를 수행하는 중…', icon: Coins, color: 'text-yellow-300', barBg: 'bg-[#713f12]', barBorder: 'border-yellow-400' },
   REST: { label: '휴식·치료', short: '휴식', desc: '의원실에서 탕약을 달여 마시며 회복 중…', icon: Heart, color: 'text-rose-300', barBg: 'bg-[#7f1d1d]', barBorder: 'border-rose-400' },
   SPAR: { label: '타류 대련', short: '대련', desc: '정문 밖으로 나가 타 도장 사범과 비무!', icon: Swords, color: 'text-red-300', barBg: 'bg-[#450a0a]', barBorder: 'border-red-400' },
+  SECLUSION: {
+    label: '폐관수련',
+    short: '폐관',
+    desc: '계절 전체를 관문 안에서 보낸다. Lv.9 벽을 넘어 극의(Lv.10)에 이르는 유일한 길. 다른 작업과 함께 할 수 없다.',
+    icon: DoorClosed,
+    color: 'text-purple-300',
+    barBg: 'bg-[#2e1065]',
+    barBorder: 'border-purple-400',
+  },
+  JOURNEY: {
+    label: '무사수행',
+    short: '수행',
+    desc: '계절 전체를 도장 밖 길 위에서 보낸다. 직접 걸으며 그 시대의 사건, 은거 고수, 숨은 비급을 만난다. 다른 작업과 함께 할 수 없다.',
+    icon: Mountain,
+    color: 'text-teal-300',
+    barBg: 'bg-[#134e4a]',
+    barBorder: 'border-teal-400',
+  },
 };
 
-const ACTIVITY_ORDER: ScheduleActivityId[] = ['TRAIN', 'BODY', 'MIND', 'DECODE', 'CRAFT', 'BUILD', 'TEACH', 'ESCORT', 'REST', 'SPAR'];
+const EXCLUSIVE: ScheduleActivityId[] = ['SECLUSION', 'JOURNEY'];
+
+const ACTIVITY_ORDER: ScheduleActivityId[] = ['TRAIN', 'BODY', 'MIND', 'DECODE', 'CRAFT', 'BUILD', 'TEACH', 'ESCORT', 'REST', 'SPAR', 'SECLUSION', 'JOURNEY'];
 
 // 결과 보고·일지 텍스트의 핵심 키워드(초식·비급·수치·돌파·경고)를 자동 컬러 하이라이트!
 function renderRichText(text: string): React.ReactNode {
@@ -607,6 +631,16 @@ export const DojoSimView: React.FC<Props> = ({
       onOpenTrain('BOOKS');
       return;
     }
+    // 폐관수련·무사수행은 계절 전체를 쓰는 단독 작업이다. 켜면 다른 작업이 모두 빠지고, 끄면 무술 연마로 돌아간다.
+    if (EXCLUSIVE.includes(id)) {
+      if (selected.includes(id)) onUpdatePlan({ activities: ['TRAIN'], weights: { TRAIN: 1 } });
+      else onUpdatePlan({ activities: [id], weights: { [id]: 1 } });
+      return;
+    }
+    if (selected.some((a) => EXCLUSIVE.includes(a))) {
+      onUpdatePlan({ activities: [id], weights: { [id]: 1 } });
+      return;
+    }
     if (selected.includes(id)) {
       if (selected.length <= 1) return;
       const nextActs = selected.filter((a) => a !== id);
@@ -894,14 +928,14 @@ export const DojoSimView: React.FC<Props> = ({
 
               {/* 실제 계획 비율 막대 위를 황금 커서가 실시간으로 채워 나가는 타임라인! */}
               <div className="relative h-6 bg-[#120c08] border border-[#8c6239] flex overflow-hidden gap-0.5 p-0.5">
-                {selected.map((actId, idx) => {
+                {(selected.includes('SECLUSION') ? (['SECLUSION', 'SECLUSION', 'SECLUSION'] as ScheduleActivityId[]) : selected).map((actId, idx) => {
                   const meta = ACTIVITY_META[actId];
-                  const w = getWeight(actId);
+                  const w = actId === 'SECLUSION' ? 1 : getWeight(actId);
                   const isCurrent = idx === activeStepIdx;
                   const isDone = idx < activeStepIdx;
                   return (
                     <div
-                      key={actId}
+                      key={`${actId}-${idx}`}
                       style={{ flexGrow: w, flexBasis: 0 }}
                       className={`relative flex items-center justify-center text-[10px] font-bold border transition-all ${
                         isCurrent
@@ -1084,36 +1118,107 @@ export const DojoSimView: React.FC<Props> = ({
 
                       {actId === 'TRAIN' && (() => {
                         const targetSk = state.skills.find((s) => s.id === (state.seasonPlan.trainSkillId || state.skills[0]?.id)) || state.skills[0];
-                        const req = targetSk ? MASTERY_EXP_REQ[targetSk.masteryLevel] || 999 : 100;
-                        const skPct = targetSk
-                          ? targetSk.masteryLevel >= 10
-                            ? 100
-                            : Math.min(100, Math.round((targetSk.masteryExp / req) * 100))
-                          : 0;
+                        const skPct = targetSk ? getMasteryPct(targetSk) : 0;
+                        const atWall = !!targetSk && isAtMasteryWall(targetSk);
                         return (
                           <div className="space-y-1">
                             <InGameSelect
                               title="연마할 초식 선택"
                               value={targetSk?.id || ''}
                               onChange={(val) => onUpdatePlan({ trainSkillId: val })}
-                              options={state.skills.map((s) => {
-                                const r = MASTERY_EXP_REQ[s.masteryLevel] || 999;
-                                const p = s.masteryLevel >= 10 ? 100 : Math.min(100, Math.round((s.masteryExp / r) * 100));
-                                return {
-                                  value: s.id,
-                                  label: `${s.customName || s.name} Lv.${s.masteryLevel}`,
-                                  sub: `${MASTERY_NAMES[s.masteryLevel]} · 숙련 ${p}% · 위력 ${s.power}`,
-                                };
-                              })}
+                              options={state.skills.map((s) => ({
+                                value: s.id,
+                                label: `${s.customName || s.name} Lv.${s.masteryLevel}`,
+                                sub: `${MASTERY_NAMES[s.masteryLevel]} · ${
+                                  isAtMasteryWall(s) ? '벽 — 폐관 필요' : `숙련 ${getMasteryPct(s)}%`
+                                } · 위력 ${s.power}`,
+                              }))}
                             />
                             {targetSk && (
                               <div className="flex items-center gap-1.5 text-[9px] text-amber-200/90">
                                 <div className="flex-1 h-1.5 bg-[#120c08] border border-[#5c432c]">
-                                  <div className="h-full bg-amber-500" style={{ width: `${skPct}%` }} />
+                                  <div className={`h-full ${atWall ? 'bg-purple-400' : 'bg-amber-500'}`} style={{ width: `${skPct}%` }} />
                                 </div>
-                                <span className="shrink-0 font-bold">{targetSk.masteryLevel >= 10 ? 'MAX' : `${skPct}%`}</span>
+                                <span className={`shrink-0 font-bold ${atWall ? 'text-purple-300' : ''}`}>
+                                  {targetSk.masteryLevel >= 10 ? '극의' : atWall ? '벽(壁)' : `${skPct}%`}
+                                </span>
                               </div>
                             )}
+                            {atWall && (
+                              <div className="text-[9px] text-purple-300/90 leading-tight">더 연마해도 늘지 않습니다. 폐관수련으로 벽을 넘으세요.</div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {actId === 'JOURNEY' && (() => {
+                        const regions = regionsForCountry(state.country);
+                        const cur = regions.find((r) => r.id === defaultRegionFor(state)) || regions[0];
+                        const dangerLabel = cur.danger >= 0.8 ? '매우 위험' : cur.danger >= 0.6 ? '위험' : cur.danger >= 0.4 ? '보통' : '평온';
+                        return (
+                          <div className="space-y-1">
+                            <InGameSelect
+                              title="무사수행을 떠날 곳"
+                              value={cur.id}
+                              onChange={(val) => onUpdatePlan({ journeyRegionId: val as typeof cur.id })}
+                              options={regions.map((r) => ({
+                                value: r.id,
+                                label: `${r.name}(${r.hanja})`,
+                                sub: r.blurb,
+                              }))}
+                            />
+                            <div className="text-[9px] leading-snug text-teal-200/90">
+                              {cur.blurb} · 위험 {dangerLabel} · 한 계절 90일
+                            </div>
+                            <div className="text-[9px] text-[#c7b394] leading-snug">
+                              직접 걸으며 사건을 만난다. 도장의 일과는 멈추고 문하생 충성이 조금 떨어진다. 길 위의 선택은 몇 해 뒤 되돌아올 수 있다.
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {actId === 'SECLUSION' && (() => {
+                        const pv = getSeclusionPreview(state);
+                        const candidates = state.skills.filter((s) => s.masteryLevel < 10);
+                        if (!pv.skill) {
+                          return <div className="text-[10px] text-purple-200">모든 초식이 이미 극의에 이르렀습니다.</div>;
+                        }
+                        const fullPct = Math.min(100, pv.insight);
+                        const nextPct = Math.min(100, pv.insight + pv.perSeason);
+                        return (
+                          <div className="space-y-1">
+                            <InGameSelect
+                              title="폐관하며 붙들 초식"
+                              accent="VIOLET"
+                              value={pv.skill.id}
+                              onChange={(val) => onUpdatePlan({ seclusionSkillId: val })}
+                              options={candidates.map((s) => ({
+                                value: s.id,
+                                label: `${s.customName || s.name} Lv.${s.masteryLevel}`,
+                                sub: isAtMasteryWall(s) ? '벽에 닿음 — 깨달음이 차면 극의 돌파 시도' : `숙련 ${getMasteryPct(s)}% · 아직 벽에 닿지 않음`,
+                              }))}
+                            />
+                            <div className="flex items-center gap-1.5 text-[9px] text-purple-200">
+                              <span className="shrink-0">깨달음</span>
+                              <div className="relative flex-1 h-1.5 bg-[#120c08] border border-purple-700/70">
+                                <div className="absolute inset-y-0 left-0 bg-purple-900" style={{ width: `${nextPct}%` }} />
+                                <div className="absolute inset-y-0 left-0 bg-purple-400" style={{ width: `${fullPct}%` }} />
+                              </div>
+                              <span className="shrink-0 font-bold">{pv.insight}%</span>
+                            </div>
+                            <div className="text-[9px] leading-snug text-purple-200/90">
+                              {pv.continuing ? `폐관 ${pv.seasonNo}계절째 (이어서)` : '새로 관문을 닫음'}
+                              {' · '}계절당 깨달음 약 +{pv.perSeason}
+                              {pv.atWall
+                                ? ` · 극의까지 약 ${pv.seasonsToFull}계절 · 돌파 확률 ${Math.round(pv.chance * 100)}%`
+                                : ' · 벽에 닿기 전까지는 숙련·정신·영력이 오른다'}
+                            </div>
+                            {pv.lostInsight > 0 && (
+                              <div className="text-[9px] text-rose-300">관을 나섰던 탓에 깨달음 {pv.lostInsight}%가 흩어집니다.</div>
+                            )}
+                            <div className="text-[9px] text-[#c7b394] leading-snug">
+                              계절 중 바깥 사건이 닿지 않고 문하생 충성이 조금 떨어집니다. 돌파에 실패하면 주화입마(건강·수명 손실).
+                            </div>
                           </div>
                         );
                       })()}
@@ -1176,13 +1281,13 @@ export const DojoSimView: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-5 sm:grid-cols-10 gap-1">
+            <div className="grid grid-cols-6 sm:grid-cols-12 gap-1">
               {ACTIVITY_ORDER.map((id) => {
                 const meta = ACTIVITY_META[id];
                 const Icon = meta.icon;
                 const active = selected.includes(id);
                 const disabled =
-                  (!active && selected.length >= maxActivities) ||
+                  (!active && !EXCLUSIVE.includes(id) && !selected.some((a) => EXCLUSIVE.includes(a)) && selected.length >= maxActivities) ||
                   (id === 'TEACH' && !state.disciples.some((d) => !d.dead));
 
                 return (

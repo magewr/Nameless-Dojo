@@ -2,6 +2,7 @@ import {
   Book,
   ImprintedTrait,
   Skill,
+  TraitTier,
   SkillElement,
   SkillForm,
   SkillOrigin,
@@ -19,7 +20,7 @@ export const MASTERY_NAMES = [
   '현경',
   '생사경',
   '입신',
-  '신기',
+  '극의',
 ];
 
 export const MASTERY_EXP_REQ: Record<number, number> = {
@@ -34,6 +35,73 @@ export const MASTERY_EXP_REQ: Record<number, number> = {
   9: 800,
   10: 999999,
 };
+
+// 수련·사건·대련으로 오를 수 있는 마지막 경지. Lv.10 극의는 폐관수련이나 큰 깨달음으로만 연다.
+export const MASTERY_WALL_LEVEL = 9;
+
+// Lv.9에서 숙련이 가득 차 더는 오르지 않는 상태 — "벽(壁)에 부딪혔다"
+export function isAtMasteryWall(skill: Pick<Skill, 'masteryLevel' | 'masteryExp'>): boolean {
+  return skill.masteryLevel === MASTERY_WALL_LEVEL && skill.masteryExp >= MASTERY_EXP_REQ[MASTERY_WALL_LEVEL];
+}
+
+// 현재 경지 안에서의 숙련 진척(0~100). 극의는 100으로 본다.
+export function getMasteryPct(skill: Pick<Skill, 'masteryLevel' | 'masteryExp'>): number {
+  if (skill.masteryLevel >= 10) return 100;
+  const req = MASTERY_EXP_REQ[skill.masteryLevel] || 999;
+  return Math.min(100, Math.round((skill.masteryExp / req) * 100));
+}
+
+// 극의에 오르는 순간 초식 자체가 바뀐다: 위력↑, 선딜·쿨타임·기력 소모↓.
+// 스킬 수치에 직접 새기므로 자동전투·실시간 전투·대회 관전 어디서나 똑같이 적용된다.
+export const TRANSCEND_POWER_MULT = 1.5;
+export const TRANSCEND_WINDUP_MULT = 0.85;
+export const TRANSCEND_COOLDOWN_MULT = 0.8;
+export const TRANSCEND_QI_MULT = 0.75;
+
+// ── 극의의 경지 ──
+// 극의는 세상에 나 하나뿐인 경지다. 강호의 어떤 고수도 Lv.9(입신)를 넘지 못하므로:
+//  · 극의 초식은 극의에 이르지 못한 자가 간파(패링)할 수 없다 — 피하는 수밖에 없다.
+//  · 극의 초식을 하나라도 지닌 무인은 상대의 수를 먼저 읽는다: 상대의 간파 확률이 줄고 나의 간파 확률이 오른다.
+export const TRANSCEND_ENEMY_PARRY_MULT = 0.6;
+export const TRANSCEND_PARRY_BONUS = 0.08;
+
+export function isTranscended(skill: Pick<Skill, 'masteryLevel'> | null | undefined): boolean {
+  return !!skill && skill.masteryLevel >= 10;
+}
+
+// 장착한 초식(심법 포함) 가운데 극의가 있는가
+export function hasTranscendence(skills: Array<Pick<Skill, 'masteryLevel'>>): boolean {
+  return skills.some((s) => s.masteryLevel >= 10);
+}
+
+// 경지 차이를 반영한 간파 확률. 한쪽만 극의일 때만 작동한다 (둘 다 극의라면 대등).
+export function applyTranscendParry(chance: number, attackerTranscended: boolean, defenderTranscended: boolean): number {
+  if (attackerTranscended && !defenderTranscended) return chance * TRANSCEND_ENEMY_PARRY_MULT;
+  if (defenderTranscended && !attackerTranscended) return chance + TRANSCEND_PARRY_BONUS;
+  return chance;
+}
+
+// 이 초식을 상대가 간파할 수 없는가 (극의 초식 vs 극의에 이르지 못한 자)
+export function isUnparryableByTranscendence(skill: Pick<Skill, 'masteryLevel'>, defenderTranscended: boolean): boolean {
+  return skill.masteryLevel >= 10 && !defenderTranscended;
+}
+
+export const TRANSCEND_SUMMARY = `위력 +${Math.round((TRANSCEND_POWER_MULT - 1) * 100)}%, 누구도 간파 못 함, 선딜·쿨타임·기력 소모 감소`;
+export const TRANSCEND_AURA_SUMMARY = `극의를 지닌 채 싸우면 상대의 간파 −${Math.round((1 - TRANSCEND_ENEMY_PARRY_MULT) * 100)}%, 나의 간파 +${Math.round(TRANSCEND_PARRY_BONUS * 100)}%p`;
+
+export function transcendSkill(skill: Skill): Skill {
+  if (skill.masteryLevel >= 10) return skill;
+  return {
+    ...skill,
+    masteryLevel: 10,
+    masteryExp: 0,
+    power: Math.round(skill.power * TRANSCEND_POWER_MULT),
+    windupMs: Math.max(80, Math.round(skill.windupMs * TRANSCEND_WINDUP_MULT)),
+    cooldownMs: Math.max(900, Math.round(skill.cooldownMs * TRANSCEND_COOLDOWN_MULT)),
+    qiCost: Math.round(skill.qiCost * TRANSCEND_QI_MULT),
+    pendingTraitTier: 10,
+  };
+}
 
 export const FORM_LABEL: Record<SkillForm, string> = {
   SLASH: '베기',
@@ -790,8 +858,68 @@ export const SIGNATURE_RECIPES: SignatureRecipe[] = [
   },
 ];
 
-// 3·6·9단계 연마 각인 생성기
-export function getTraitCandidates(skill: Skill, tier: 3 | 6 | 9): ImprintedTrait[] {
+// 극의(Lv.10) 각인. 위력 배수는 극의 돌파 때 이미 올렸으므로 여기서는 성질을 바꾸는 효과 위주로 둔다.
+function getTranscendTraits(skill: Skill): ImprintedTrait[] {
+  if (skill.isPassive) {
+    return [
+      {
+        tier: 10,
+        id: 'x_p_life_gate',
+        label: '【생사현관 타통(生死玄關)】',
+        description: '비무 중 기력 회복 +80%, 모든 초식 위력 +20%, 최대 생명력 +20%',
+        effect: { passiveQiRegenBonus: 0.8, passiveAllDamageBonus: 0.2, passiveMaxHpBonus: 0.2 },
+      },
+      {
+        tier: 10,
+        id: 'x_p_rebirth',
+        label: '【환골탈태(換骨奪胎)】',
+        description: '매 계절 건강 회복 +10, 받는 피해 -18%, 최대 생명력 +25%',
+        effect: { passiveHealthRegen: 10, passiveDamageReduce: 0.18, passiveMaxHpBonus: 0.25 },
+      },
+      {
+        tier: 10,
+        id: 'x_p_mind_sword',
+        label: '【심검(心劍)】',
+        description: '간파(看破) 확률 +18%, 모든 초식 위력 +16%, 받는 피해 -8%',
+        effect: { passiveParryBonus: 0.18, passiveAllDamageBonus: 0.16, passiveDamageReduce: 0.08 },
+      },
+    ];
+  }
+  if (skill.form === 'PARRY') {
+    return [
+      { tier: 10, id: 'x_parry_first', label: '【후발선지(後發先至)】', description: '간파 판정 창 +160ms, 간파 직후 반격 3배', effect: { parryWindowBonus: 160, counterMult: 3.0 } },
+      { tier: 10, id: 'x_parry_wall', label: '【철벽무애(鐵壁無礙)】', description: '간파 판정 창 +100ms, 명중 시 기력 +20, 체세 피해 +80%', effect: { parryWindowBonus: 100, qiGainOnHit: 20, postureMult: 1.8 } },
+      { tier: 10, id: 'x_parry_void', label: '【이유제강(以柔制剛)】', description: '반격 2.6배, 방어 완전 무시', effect: { counterMult: 2.6, armorPierce: 1.0 } },
+    ];
+  }
+  return [
+    {
+      tier: 10,
+      id: 'x_one_strike',
+      label: '【일격필살(一擊必殺)】',
+      description: 'HP 38% 이하 적 처형, 방어 완전 무시',
+      effect: { executeThreshold: 0.38, armorPierce: 1.0 },
+    },
+    {
+      tier: 10,
+      id: 'x_formless',
+      label: '【무초승유초(無招勝有招)】',
+      description: '선딜 -45%, 쿨타임 -35%, 방어 불가',
+      effect: { windupMult: 0.55, cooldownMult: 0.65, unblockable: true },
+    },
+    {
+      tier: 10,
+      id: 'x_sword_qi',
+      label: '【검기성강(劍氣成罡)】',
+      description: '원거리 확장, 회피 무시, 병기 궁합 무시, 명중 시 기력 +15',
+      effect: { rangeExtend: true, ignoreEvade: true, multiHit: 2, noWeaponPenalty: true, qiGainOnHit: 15 },
+    },
+  ];
+}
+
+// 3·6·9단계 연마 각인 생성기 (10은 극의 각인)
+export function getTraitCandidates(skill: Skill, tier: TraitTier): ImprintedTrait[] {
+  if (tier === 10) return getTranscendTraits(skill);
   // ★ 운기 심법(패시브) 전용 3/6/9레벨 내공·호신·양생 각인 풀! ★
   if (skill.isPassive) {
     if (tier === 3) {
@@ -930,7 +1058,7 @@ export function getTraitCandidates(skill: Skill, tier: 3 | 6 | 9): ImprintedTrai
           { tier: 6, id: 'g6_counter', label: '간파 극대화', description: '간파 직후 피해 2.0배, 쿨 -15%', effect: { counterMult: 2.0, cooldownMult: 0.85 } },
         ]
       : [
-          { tier: 9, id: 'g9_apex', label: '【입신 극의】', description: '피해 +55%, 선딜 -25%', effect: { damageMult: 1.55, windupMult: 0.75 } },
+          { tier: 9, id: 'g9_apex', label: '【입신 절초】', description: '피해 +55%, 선딜 -25%', effect: { damageMult: 1.55, windupMult: 0.75 } },
           { tier: 9, id: 'g9_break', label: '【절대 파훼】', description: '방어 불가 + 방어 70% 무시 + 피해 +40%', effect: { unblockable: true, armorPierce: 0.7, damageMult: 1.4 } },
           { tier: 9, id: 'g9_exec', label: '【생사결단】', description: 'HP 28% 이하 처형 + 피해 +45%', effect: { executeThreshold: 0.28, damageMult: 1.45 } },
         ];

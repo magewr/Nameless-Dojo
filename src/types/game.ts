@@ -13,7 +13,9 @@ export type ScheduleActivityId =
   | 'TEACH'
   | 'ESCORT'
   | 'REST'
-  | 'SPAR';
+  | 'SPAR'
+  | 'SECLUSION' // 폐관수련 — 계절 전체를 쓰는 단독 작업
+  | 'JOURNEY'; // 무사수행 — 계절 전체를 도장 밖 필드에서 보낸다
 
 export type BattleTactic = 'AGGRESSIVE' | 'BALANCED' | 'COUNTER';
 
@@ -36,6 +38,126 @@ export interface SeasonPlan {
   weights?: Partial<Record<ScheduleActivityId, number>>; // 각 활동 비중 (1 ~ 4)
   trainSkillId: string;
   decodeBookId: string;
+  seclusionSkillId?: string; // 폐관수련으로 벽을 깨려는 초식
+  journeyRegionId?: JourneyRegionId; // 무사수행을 떠날 지역
+}
+
+// ───────── 무사수행 ─────────
+export type JourneyRegionId =
+  | 'KR_JIRI'
+  | 'KR_GEUMGANG'
+  | 'KR_GWANSEO'
+  | 'CN_HUASHAN'
+  | 'CN_JIANGNAN'
+  | 'CN_HUGUANG'
+  | 'JP_TOKAIDO'
+  | 'JP_KYOTO'
+  | 'JP_KYUSHU';
+
+export type JourneyPoiKind = 'INN' | 'MASTER' | 'TREASURE' | 'PEOPLE' | 'HISTORY' | 'SHRINE' | 'VISTA' | 'ECHO';
+
+export interface JourneyPoi {
+  id: string;
+  kind: JourneyPoiKind;
+  eventKey: string;
+  x: number; // 구간 안에서의 위치(px)
+  label: string;
+  done?: boolean;
+  data?: Record<string, string | number>;
+}
+
+export interface JourneyState {
+  regionId: JourneyRegionId;
+  day: number; // 쓴 날수
+  maxDays: number; // 한 계절 = 90일
+  legId: string;
+  legCount: number; // 지나온 구간 수
+  legLength: number; // 이번 구간 길이(px)
+  heroX: number;
+  pois: JourneyPoi[];
+  ambushAt: number[]; // 아직 터지지 않은 돌발 사건 위치
+  visitedLegs: string[];
+  highlights: string[];
+  start: { money: number; fame: number; health: number; stats: Stats; year: number; season: Season };
+  atFork?: boolean; // 구간 끝 갈림길에 서 있다
+  usedKeys?: string[]; // 이번 수행에서 이미 놓였던 사건 (같은 수행 안에서 되풀이하지 않는다)
+  lastRumor?: string;
+}
+
+// ───────── 천하제일 무술대회 (실제 토너먼트) ─────────
+export interface TourneyFighter {
+  id: string;
+  name: string;
+  sect: string;
+  country: CountryId;
+  gender: Gender;
+  bornYear: number;
+  ai: EnemyAiType;
+  weapon: WeaponGroup;
+  skills: string[];
+  potential: number; // 전성기 강도 (전투 강도 0.6 ~ 3.8)
+  peakAge: number;
+  titles: number; // 우승 횟수
+  bestRound?: number; // 최고 성적 (0 16강 ~ 4 우승)
+  kind?: 'NPC' | 'RIVAL' | 'DISCIPLE';
+  discipleId?: string;
+  retired?: boolean;
+  epithet?: string; // 별호
+}
+
+export interface TourneyMatch {
+  id: string;
+  round: number; // 0 16강 · 1 8강 · 2 4강 · 3 결승
+  slot: number;
+  a: string; // 선수 id ('HERO'는 주인공)
+  b: string;
+  winner?: string;
+  upset?: boolean;
+  watched?: boolean;
+}
+
+export interface TourneyState {
+  year: number;
+  name: string;
+  mode: 'ENTER' | 'WATCH';
+  stage: 'QUALIFIER' | 'BRACKET' | 'DONE';
+  qualifierWins: number;
+  seeded: boolean; // 예선 면제 (디펜딩 챔피언·대문파)
+  entrants: TourneyFighter[]; // 본선 16인 (이번 대회 시점의 강도로 고정)
+  powers: Record<string, number>; // 이번 대회 시점 강도
+  matches: TourneyMatch[];
+  round: number;
+  heroOut: boolean;
+  heroBest: number; // 주인공이 오른 본선 회전 (-1 예선 탈락)
+  championId?: string;
+  news: string[];
+}
+
+export interface TourneyRecord {
+  year: number;
+  champion: string;
+  championSect: string;
+  runnerUp: string;
+  heroResult: string;
+}
+
+// 길 위의 선택이 남긴 메아리. 때가 되면 도장(HOME)이나 다음 무사수행의 길(ROAD)로 되돌아온다.
+export interface EchoEntry {
+  key: string;
+  dueTurn: number;
+  channel: 'HOME' | 'ROAD';
+  bornYear: number;
+  bornText: string; // "쫓기던 서생을 숨겨 주었다" — 연대기에 원인으로 남는다
+  regionId?: JourneyRegionId; // ROAD 메아리가 나타날 지역 (없으면 어디서나)
+  data?: Record<string, string | number>;
+}
+
+// 폐관수련 진행 상태. 계절을 이어서 폐관하면 깨달음이 쌓이고, 관을 나섰다 돌아오면 절반이 흩어진다.
+export interface SeclusionState {
+  skillId: string;
+  insight: number; // 깨달음 0 ~ 100
+  seasons: number; // 연달아 폐관한 계절 수
+  lastTurn: number; // 마지막으로 폐관한 턴
 }
 
 export interface SeasonTickResult {
@@ -90,8 +212,10 @@ export type DisabilityType = 'ONE_ARM' | 'BLIND' | 'LIMP';
 
 export type AwakeningType = 'ONE_ARM_SAINT' | 'MIND_EYE' | 'IMMOVABLE';
 
+export type TraitTier = 3 | 6 | 9 | 10;
+
 export interface ImprintedTrait {
-  tier: 3 | 6 | 9;
+  tier: TraitTier; // 10은 극의(極意) 각인 — 폐관수련·큰 깨달음으로만 연다
   id: string;
   label: string;
   description: string;
@@ -138,7 +262,7 @@ export interface Skill {
   masteryLevel: number;
   masteryExp: number;
   imprintedTraits: ImprintedTrait[];
-  pendingTraitTier?: 3 | 6 | 9;
+  pendingTraitTier?: TraitTier;
   power: number;
   windupMs: number;
   recoveryMs: number;
@@ -353,6 +477,8 @@ export interface BattleConfig {
   title: string;
   subtitle: string;
   isRealDuel: boolean;
+  // 무사수행 진검승부에서 상대의 적의. MERCY: 이겨도 목숨·치명상은 봐준다. HOSTILE: 난이도에 따라 목숨을 거둘 수 있다.
+  journeyStakes?: 'MERCY' | 'HOSTILE';
   canUseDisciple: boolean;
   enemyName: string;
   enemyTitle: string;
@@ -411,6 +537,7 @@ export interface ActiveEvent {
   dialogue?: string;
   script?: SceneDialogueLine[];
   outcomeScripts?: Record<string, SceneDialogueLine[]>; // 선택지별 여운 있는 2~3마디 결말 대사!
+  illustration?: string; // 사건 카드 위에 띄울 장면 그림 (/assets/...)
   options: GameEventOption[];
   meta?: Record<string, unknown>;
 }
@@ -511,6 +638,12 @@ export interface GameState {
   seasonPlan: SeasonPlan;
   activeCraft: ActiveCraftProject | null;
   activeBuild: ActiveBuildProject | null;
+  seclusion?: SeclusionState | null; // 구버전 세이브에는 없을 수 있다
+  journey?: JourneyState | null; // 무사수행 중이면 도장 대신 필드를 보여 준다
+  pendingNotice?: SceneDialogueLine[] | null; // 방금 고른 선택의 결말 대사 (결과 창이 기록 한 줄 대신 띄운다)
+  journeyBattleCtx?: Record<string, string | number> | null; // 무사수행 비무가 끝난 뒤 이어 쓸 사건 정보
+  tourney?: TourneyState | null; // 진행 중인 천하제일 무술대회
+  tourneyRoster?: TourneyFighter[]; // 강호의 고수 명부 (대회마다 나이 들고, 은퇴하고, 새 얼굴이 나온다)
   battleTactic: BattleTactic;
   lastSeasonSummary: SeasonSummaryData | null;
   flags: {
@@ -534,6 +667,11 @@ export interface GameState {
     recentEventBases?: string[]; // 최근 발동 이벤트 계열 기록 (중복 도배 방지!)
     minorEventIdsSeen: string[];
     storyMemory: Record<string, string>; // 사소한 NPC·과거 선택의 장기 인과 기억!
+    echoes?: EchoEntry[]; // 무사수행에서 남긴 메아리 (나비효과)
+    journeyDone?: string[]; // 일생에 한 번뿐인 무사수행 사건 (고수·시대 사건·대오 장소)
+    journeyCount?: number;
+    tourneyHistory?: TourneyRecord[];
+    homeEventLast?: Record<string, number>; // 생성형 도장 사건마다 마지막으로 일어난 턴 (같은 틀이 연달아 나오지 않게)
     tutorialDone?: boolean;
     grandmasterWins?: number;
     tournamentWins?: number;

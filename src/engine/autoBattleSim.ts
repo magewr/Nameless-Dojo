@@ -7,6 +7,8 @@ import {
   Stats,
 } from '../types/game';
 import { BattleOutcomePayload } from './gameLogic';
+import { applyTranscendParry, hasTranscendence, isUnparryableByTranscendence } from '../data/booksAndSkills';
+import { bladeDamageMult, checkSurrender, DuelEnding, fatalBlowChance, fatalBlowDamage, yieldThreshold } from './duelRules';
 
 // 완전 자동전투(Full Auto-Battle) 고속 시뮬레이터 — UI 관전 '결과 즉시 보기'와 몬테카를로 테스트봇이 100% 동일 공식 사용!
 export function simulateAutoBattleQuick(
@@ -64,6 +66,10 @@ export function simulateAutoBattleQuick(
     { qiRegen: 0, dmgReduce: 0, allDmg: 0, parry: 0, maxHp: 0 }
   );
 
+  // 극의의 경지 — 주인공은 장착한 초식·심법 중 극의가 있으면, 제자는 자기 초식 중 극의가 있으면.
+  const pTranscended = hasTranscendence(fighterType === 'HERO' ? [...pSkills, ...passiveSkills] : pSkills);
+  const eTranscended = hasTranscendence(battle.enemySkills);
+
   let pHp = Math.round((110 + pStats.vit * 6) * (1 + Math.min(0.5, pBonus.maxHp)));
   const pMaxHp = pHp;
   let pQi = Math.round((45 + pStats.wil * 2 + pStats.qi * 1.5) * (1 + Math.min(0.4, pBonus.qiRegen * 0.4)));
@@ -91,7 +97,7 @@ export function simulateAutoBattleQuick(
   const tacticAtkBonus = tactic === 'AGGRESSIVE' ? 1.12 : tactic === 'COUNTER' ? 0.92 : 1.0;
   const pStatGap = (pStats.ins - battle.enemyStats.ins) * 0.0032;
   const eStatGap = (battle.enemyStats.ins - pStats.ins) * 0.0032;
-  const pParryBase = Math.max(
+  const pParryBase = applyTranscendParry(Math.max(
     0.05,
     Math.min(
       0.74,
@@ -105,11 +111,12 @@ export function simulateAutoBattleQuick(
         pBonus.parry +
         (hasMindEye ? 0.18 : 0)
     )
-  );
+  ), eTranscended, pTranscended);
   const pDodgeChance = Math.max(0.05, Math.min(0.64, 0.1 + pStats.agi * 0.0048 + (pSkills.some((s) => s.form === 'STEP') ? 0.12 : 0)));
-  const eParryBase = Math.max(
-    0.05,
-    Math.min(0.74, 0.08 + battle.enemyStats.ins * 0.0036 + eStatGap + eParrySkillBonus + eBestParryLv * 0.012)
+  const eParryBase = applyTranscendParry(
+    Math.max(0.05, Math.min(0.74, 0.08 + battle.enemyStats.ins * 0.0036 + eStatGap + eParrySkillBonus + eBestParryLv * 0.012)),
+    pTranscended,
+    eTranscended
   );
 
   // 가속 정교 연환 공방 판정 헬퍼 (AutoBattleView와 100% 동일 공식!)
@@ -127,7 +134,8 @@ export function simulateAutoBattleQuick(
     const lvDiff = (defBestLv - atkBestLv) * 0.014 * precisionScale;
     const parryAdv = defParryBonus * (chain >= 2 ? 1.25 : 1.0);
     const extra = defIsP ? parryTraitBonus + pBonus.parry + (tactic === 'COUNTER' ? 0.08 : 0) + (hasMindEye ? 0.12 : 0) : 0;
-    return Math.max(0.05, Math.min(0.84, 0.24 + defSt.ins * 0.0026 + clashMomentum + insDiff + agiDiff + mindDiff + lvDiff + parryAdv + extra));
+    const raw = Math.max(0.05, Math.min(0.84, 0.24 + defSt.ins * 0.0026 + clashMomentum + insDiff + agiDiff + mindDiff + lvDiff + parryAdv + extra));
+    return defIsP ? applyTranscendParry(raw, eTranscended, pTranscended) : applyTranscendParry(raw, pTranscended, eTranscended);
   };
 
   let usedMagic = false;
@@ -136,6 +144,38 @@ export function simulateAutoBattleQuick(
   let recoilHealth = 0;
   let recoilLife = 0;
   let pCounterBuff = false;
+
+  // ★ 목검/진검 규칙: 피해 배율 · 목검 항복선 · 진검 치명상
+  const isReal = battle.isRealDuel;
+  const bladeMult = bladeDamageMult(isReal);
+  const pYieldAt = yieldThreshold(pStats, isReal);
+  const eYieldAt = yieldThreshold(battle.enemyStats, isReal);
+  let fatalTaken = 0;
+  let fatalDealt = 0;
+  let surrendered: 'P' | 'E' | null = null;
+  // 깨끗하게 들어간 일격: 목검/진검 배율을 곱하고, 진검이면 치명상 판정까지.
+  const hitEnemy = (raw: number, isCounter: boolean) => {
+    let dmg = Math.max(isReal ? 8 : 4, Math.round(raw * bladeMult));
+    if (Math.random() < fatalBlowChance(pStats, battle.enemyStats, isReal, isCounter)) {
+      dmg = Math.max(dmg, fatalBlowDamage(battle.enemyHp, battle.enemyStats));
+      fatalDealt += 1;
+    }
+    eHp = Math.max(0, eHp - dmg);
+  };
+  const hitPlayer = (raw: number, isCounter: boolean) => {
+    let dmg = Math.max(isReal ? 7 : 4, Math.round(raw * bladeMult));
+    // 무사수행에서 자비로운 상대(MERCY)는 이겨도 목숨까지는 노리지 않는다 — 치명상을 넣지 않는다.
+    if (battle.journeyStakes !== 'MERCY' && Math.random() < fatalBlowChance(battle.enemyStats, pStats, isReal, isCounter)) {
+      dmg = Math.max(dmg, fatalBlowDamage(pMaxHp, pStats));
+      fatalTaken += 1;
+    }
+    pHp = Math.max(0, pHp - dmg);
+  };
+  const yieldCheck = () => {
+    if (isReal || pHp <= 0 || eHp <= 0) return false;
+    surrendered = checkSurrender(pHp / pMaxHp, eHp / battle.enemyHp, pYieldAt, eYieldAt);
+    return surrendered !== null;
+  };
 
   // 최대 35라운드 공방 시뮬레이션
   for (let round = 0; round < 35 && pHp > 0 && eHp > 0; round++) {
@@ -157,7 +197,8 @@ export function simulateAutoBattleQuick(
 
       // 연환 반격 공방(Counter Chain) 판정: 반격기 자체도 재반격 가능하며 합이 쌓일수록 어려워짐!
       // 단, 방어불가 강공(RED/unblockable)은 패링 불가, 원거리/이계 비술은 패링 난이도 대폭 상승!
-      const isUnblockable = pSk.telegraph === 'RED' || pSk.imprintedTraits.some((t) => t.effect.unblockable);
+      const isUnblockable =
+        pSk.telegraph === 'RED' || pSk.imprintedTraits.some((t) => t.effect.unblockable) || isUnparryableByTranscendence(pSk, eTranscended);
       const magicParryMult = pSk.form === 'PROJECTILE' || pSk.origin.includes('FANTASY') ? 0.35 : 1.0;
       let attackerIsP = true;
       let chain = 0;
@@ -188,27 +229,26 @@ export function simulateAutoBattleQuick(
         if (pPassives.includes('sk_cn_09') && pSk.element === 'QI') mult *= 1.2;
         const rawDefReduce = Math.min(0.45, Math.max(0, (battle.enemyStats.vit + battle.enemyStats.qi - 55) * 0.0023));
         const eDefReduce = rawDefReduce * (pSk.element !== 'PHYSICAL' ? 0.6 : 1.0);
-        const dmg = Math.max(8, Math.round((base + statAdd) * mult * (1 - eDefReduce) * 0.62));
-        eHp = Math.max(0, eHp - dmg);
+        hitEnemy(Math.max(8, (base + statAdd) * mult * (1 - eDefReduce) * 0.62), chain > 0);
         pCounterBuff = false;
       } else {
         // 연환 공방에서 플레이어가 뚫려 적의 반격 피격!
         const eCounterSk = battle.enemySkills[round % battle.enemySkills.length];
         const eBase = (eCounterSk?.power || 24) * (1 + (eCounterSk?.masteryLevel || 1) * 0.14);
         const eAdd = battle.enemyStats.str * 0.78 + battle.enemyStats.qi * 0.35 + 14;
-        const dmg = Math.max(7, Math.round((eBase + eAdd) * (1.12 + chain * 0.08) * 0.44));
-        pHp = Math.max(0, pHp - dmg);
+        hitPlayer(Math.max(7, (eBase + eAdd) * (1.12 + chain * 0.08) * 0.44), true);
       }
     }
-    if (eHp <= 0 || pHp <= 0) break;
+    if (eHp <= 0 || pHp <= 0 || yieldCheck()) break;
 
     // 2. 적 공격 (플레이어 간파 시에도 적이 다시 재반격할 수 있음!)
     const eSk = battle.enemySkills[round % battle.enemySkills.length];
     if (eSk) {
-      if (eSk.telegraph === 'RED' && Math.random() < pDodgeChance) {
+      const eUnparryable = eSk.telegraph === 'RED' || isUnparryableByTranscendence(eSk, pTranscended);
+      if (eUnparryable && Math.random() < pDodgeChance) {
         continue;
       }
-      if (eSk.telegraph !== 'RED' && Math.random() < pParryBase) {
+      if (!eUnparryable && Math.random() < pParryBase) {
         justParries += 1;
         pQi = Math.min(pMaxQi, pQi + 18);
         // 플레이어 반격도 적이 재반격 가능!
@@ -227,27 +267,33 @@ export function simulateAutoBattleQuick(
         if (attackerIsP) {
           pCounterBuff = true;
           const cSk = pSkills.find((s) => s.form === 'PARRY') || pSkills[0];
-          const dmg = Math.max(10, Math.round(((cSk?.power || 25) * (1 + (cSk?.masteryLevel || 1) * 0.13) + pStats.str * 0.7 + wAtk * 0.8) * (1.35 + chain * 0.1) * 0.56));
-          eHp = Math.max(0, eHp - dmg);
+          hitEnemy(Math.max(10, ((cSk?.power || 25) * (1 + (cSk?.masteryLevel || 1) * 0.13) + pStats.str * 0.7 + wAtk * 0.8) * (1.35 + chain * 0.1) * 0.56), true);
         } else {
           const eBase = eSk.power * (1 + eSk.masteryLevel * 0.14);
           const eAdd = battle.enemyStats.str * 0.78 + battle.enemyStats.qi * 0.35 + 14;
-          pHp = Math.max(0, pHp - Math.max(7, Math.round((eBase + eAdd) * (1.2 + chain * 0.1) * 0.52)));
+          hitPlayer(Math.max(7, (eBase + eAdd) * (1.2 + chain * 0.1) * 0.52), true);
         }
+        if (yieldCheck()) break;
         continue;
       }
       const eBase = eSk.power * (1 + eSk.masteryLevel * 0.14);
       const eAdd = battle.enemyStats.str * 0.78 + battle.enemyStats.qi * 0.35 + 14;
       const qiGuard = Math.min(0.48, Math.max(0, (pStats.vit + pStats.qi - 50) * 0.0022) + pBonus.dmgReduce);
       const dmgMult = (pPassives.includes('sk_cn_09') ? 0.85 : 1.0) * (1 - qiGuard);
-      const eDmg = Math.max(7, Math.round((eBase + eAdd) * dmgMult * 0.60));
-      pHp = Math.max(0, pHp - eDmg);
+      hitPlayer(Math.max(7, (eBase + eAdd) * dmgMult * 0.60), false);
     }
+    if (yieldCheck()) break;
   }
 
-  // 시간 종료 시 남은 HP 비율로 판정
-  const victory = eHp <= 0 || (pHp > 0 && pHp / pMaxHp >= eHp / battle.enemyHp);
+  // 시간 종료 시 남은 HP 비율로 판정 (목검은 먼저 무릎 꿇은 쪽이 패배)
+  const yielded = surrendered as 'P' | 'E' | null;
+  const victory = yielded ? yielded === 'E' : eHp <= 0 || (pHp > 0 && pHp / pMaxHp >= eHp / battle.enemyHp);
+  const ko = pHp <= 0 || eHp <= 0;
+  const endedBy: DuelEnding = yielded ? 'SURRENDER' : ko ? ((victory ? fatalDealt : fatalTaken) > 0 ? 'FATAL' : 'KO') : 'TIMEOUT';
   return {
+    endedBy,
+    fatalWoundsTaken: fatalTaken,
+    fatalWoundsDealt: fatalDealt,
     victory,
     fighterType,
     discipleId,
