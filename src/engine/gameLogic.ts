@@ -70,7 +70,7 @@ import { buildDetailedVictoryConclusion, buildRealDuelAftermathEvent, pickAvenge
 import { josa } from '../utils/korean';
 
 import { addLog } from './log';
-import { applyJourneyBattle, applyJourneyDefeat, isJourneyEvent, pickDueHomeEcho, pickHomeEvent, resolveJourneyEvent } from './journey';
+import { applyJourneyBattle, applyJourneyDefeat, isJourneyEvent, pickDueHomeEcho, pickElderEvent, pickHomeEvent, resolveJourneyEvent } from './journey';
 import { applyTourneyBattle, startTourney } from './tourney';
 export { addLog };
 
@@ -1137,8 +1137,42 @@ export function rollMidSeasonEvent(state: GameState): ActiveEvent | null {
 // 정해진 이야기(라이벌·가족·역사·대회 등)는 그대로 두고, 우연에 맡기던 자리에는 생성형 사건을 섞는다.
 // 고정된 일회성 사건이 바닥나도 계절마다 다른 사람·다른 사연이 찾아온다.
 const RANDOM_POOL_PREFIX = ['random_', 'life_', 'duel_british', 'duel_mongol', 'duel_henri'];
+// 노년에는 늘 되풀이되던 도장의 일상(하산·재방문·말썽·교류·도장깨기)을 밀어내고 노년의 사건이 자리를 차지할 수 있다.
+// 생애 변곡점·숙적·대회·후계·시대 사건·재난·반란처럼 정해진 큰 사건은 건드리지 않는다.
+const ELDER_REPLACEABLE = [
+  ...RANDOM_POOL_PREFIX,
+  'disciple_graduate',
+  'grad_revisit_ordinary',
+  'grad_revisit_success',
+  'grad_revisit_master',
+  'disciple_illness',
+  'sect_exchange',
+  'sect_envoy',
+  'sect_alliance',
+  'sect_aid',
+  'trouble_brawl',
+  'trouble_bully',
+  'trouble_gamble',
+  'trouble_theft',
+  'gift_disciple',
+  'hero_fever',
+];
+function elderShare(age: number): number {
+  return age >= 75 ? 0.66 : age >= 68 ? 0.6 : age >= 60 ? 0.55 : 0.45;
+}
 function pickSeasonEventMixed(state: GameState): ActiveEvent | null {
   const fixed = pickSeasonalEvent(state);
+  if (state.age >= 55) {
+    // 조용한 계절은 예전처럼 절반쯤은 조용히 지나간다 (사건이 더 잦아지지는 않는다). 일어난다면 노년의 사건을 먼저.
+    if (!fixed) {
+      if (Math.random() >= 0.47) return null;
+      return pickElderEvent(state) || pickHomeEvent(state);
+    }
+    if (ELDER_REPLACEABLE.some((p) => fixed.id.startsWith(p)) && Math.random() < elderShare(state.age)) {
+      const elder = pickElderEvent(state);
+      if (elder) return elder;
+    }
+  }
   const replaceable = !fixed || RANDOM_POOL_PREFIX.some((p) => fixed.id.startsWith(p));
   if (!replaceable) return fixed;
   const gen = pickHomeEvent(state);
@@ -1166,10 +1200,12 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
   const coolLimit = getDifficultyId(state) === 'HELL' ? 2 : getDifficultyId(state) === 'HARD' ? 3 : 6;
   const nextRecent = isAftermath ? prevRecent : [baseKey, ...prevRecent.filter((k) => k !== baseKey)].slice(0, coolLimit);
 
+  // 계열마다 마지막으로 일어난 턴도 남긴다 — 같은 계열이 너무 촘촘히 되풀이되지 않게 (events.ts · sectEvents.ts의 간격 표)
+  const fixedLast = isJourneyEvent(event) ? state.flags.homeEventLast : { ...(state.flags.homeEventLast || {}), [`@${baseKey}`]: state.turn };
   let next: GameState = {
     ...state,
     activeEvent: null,
-    flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent },
+    flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent, homeEventLast: fixedLast },
   };
   const cMeta = COUNTRIES[state.country];
   const diffCfg = getDifficultyConfig(state);
@@ -1790,7 +1826,19 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       next.debtTurns = 0;
       next.fame = Math.max(0, next.fame - 15);
       next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 20 };
-      return addLog(next, '전당포 해결사 노릇으로 빚을 탕감했다. 저잣거리의 시선이 싸늘하다.', 'WARN');
+      if (state.age >= 62) next.health = Math.max(1, next.health - 8);
+      return addLog(next, state.age >= 62 ? '백발로 전당포의 해결사 노릇을 했다. 빚은 갚았지만, 제자들이 그 모습을 보고 고개를 돌렸다.' : '전당포 해결사 노릇으로 빚을 탕감했다. 저잣거리의 시선이 싸늘하다.', 'WARN');
+    case 'debt_disciples':
+      next.debt = 0;
+      next.debtTurns = 0;
+      next.disciples = next.disciples.map((d) => (d.dead || d.isChild ? d : { ...d, loyalty: Math.min(100, d.loyalty + 6), stats: { ...d.stats, vit: d.stats.vit + 1 } }));
+      next.reputation = { ...next.reputation, virtue: next.reputation.virtue + 6 };
+      return addLog(next, '제자들이 한 해 동안 장터 짐꾼과 표국 호위로 품을 팔아 스승의 빚을 갚았다. 그해 마당은 저녁에만 붐볐다.', 'GOOD');
+    case 'debt_sell_land':
+      next.debt = 0;
+      next.debtTurns = 0;
+      next.facilities = { ...next.facilities, yard: Math.max(1, next.facilities.yard - 1) };
+      return addLog(next, '연무장 땅 절반을 팔아 빚을 갚았다. 담장이 안쪽으로 옮겨졌다. 마당이 좁아진 만큼 목검 소리가 가까워졌다.', 'WARN');
     case 'debt_duel':
       next.pendingBattle = createBattleConfig(
         'b_debt_duel', '빚 청산 진검결투', '패배 시 사망 위험', true,

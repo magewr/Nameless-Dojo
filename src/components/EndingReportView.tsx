@@ -441,7 +441,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
                 <div className="p-3.5 border border-[#6b4728] bg-[#1b120c] space-y-1.5">
                   <div className="font-bold text-sm text-[#fde68a]">유파 계승</div>
                   <p>창시자: {state.name} (1750~{state.year})</p>
-                  <p>배우자: {state.spouse ? state.spouse.name : '독신'}</p>
+                  <p>배우자: {state.spouse ? `${state.spouse.name}${state.spouse.alive ? '' : ' (먼저 떠남)'}` : '독신'}</p>
                   <p>{report.heirSummary}</p>
                 </div>
                 <div className="p-3.5 border border-[#6b4728] bg-[#1b120c] space-y-1.5">

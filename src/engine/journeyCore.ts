@@ -91,6 +91,7 @@ export interface JourneyEventDef {
   once?: boolean; // 일생에 한 번
   weight?: number;
   cooldown?: number; // 도장 생성형 사건: 다시 나오기까지의 계절 수 (기본 6)
+  elder?: boolean; // 노년(55세+)의 사건 — 도장 생성형 사건과 따로 뽑는다 (노년 몫의 자리에만 나온다)
   cond?: (s: GameState, r: JourneyRegion) => boolean;
   trigger?: JourneyTrigger;
   weightBy?: (s: GameState, r: JourneyRegion) => number; // 상황에 따른 가중치 배수 (예: 호환은 겨울에 잦다)

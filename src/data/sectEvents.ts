@@ -476,9 +476,43 @@ function pickSectEvent(state: GameState): ActiveEvent | null {
 
 // ---------------------------------------------------------------- 진입점
 
+// 같은 종류의 문파 사건·말썽이 촘촘히 되풀이되지 않게 (계절 수, 노년에는 1.5배)
+const DRAMA_GAP: Record<string, number> = {
+  trouble_brawl: 5,
+  trouble_bully: 5,
+  trouble_theft: 5,
+  trouble_gamble: 5,
+  trouble_tipoff: 6,
+  trouble_poach: 6,
+  sect_envoy: 6,
+  sect_exchange: 6,
+  sect_alliance: 6,
+  sect_aid: 6,
+  sect_peace: 6,
+  sect_shakedown: 6,
+};
+function dramaCooling(state: GameState, ev: ActiveEvent | null): boolean {
+  if (!ev) return false;
+  const base = ev.id.replace(/_\d+$/, '');
+  const gap = DRAMA_GAP[base];
+  const last = state.flags.homeEventLast?.[`@${base}`];
+  if (!gap || last === undefined) return false;
+  return state.turn - last < Math.round(gap * (state.age >= 55 ? 1.5 : 1));
+}
+
 export function pickDramaEvent(state: GameState): ActiveEvent | null {
+  const ev = pickDramaEventRaw(state);
+  // 반란은 간격과 상관없이 터진다
+  if (ev && !ev.id.startsWith('rebellion') && dramaCooling(state, ev)) return null;
+  return ev;
+}
+
+function pickDramaEventRaw(state: GameState): ActiveEvent | null {
   if (state.turn < 8 || !state.sects) return null;
-  const cfg = getDifficultyConfig(state);
+  // 양위하고 물러났다면 문하의 말썽과 문파 사이의 일은 대부분 종주가 맡는다
+  const baseCfg = getDifficultyConfig(state);
+  const retired = !!state.flags.abdicated && state.disciples.some((d) => d.id === state.flags.abdicated!.heirId && !d.dead);
+  const cfg = retired ? { ...baseCfg, troubleEventRate: baseCfg.troubleEventRate * 0.4, sectEventRate: baseCfg.sectEventRate * 0.5 } : baseCfg;
   const gap = state.turn - (state.flags.lastDramaTurn ?? -99);
 
   // 반란은 다른 무엇보다 먼저 터진다. (직전 턴에 다른 사건이 있었으면 한 철 미룬다)

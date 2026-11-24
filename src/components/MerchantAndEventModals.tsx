@@ -5,6 +5,16 @@ import { ELEMENT_LABEL, FORM_LABEL, getTraitCandidates, MASTERY_NAMES, TRANSCEND
 import { getMerchantBookAppraisal, getWeaponAppraisal } from '../data/worldLore';
 import { buildShortLinesFromLegacy } from '../data/storyScripts';
 import { PixelPortrait } from './PixelPortrait';
+
+// 말하는 사람이 배우자·숙적·제자라면 그 사람의 실제 나이로 초상을 고른다 (모르면 초상의 기본값)
+const spouseGender = (state: GameState) => state.spouse?.gender || (state.gender === 'FEMALE' ? 'MALE' : 'FEMALE');
+function speakerAge(state: GameState, speaker: string): number | undefined {
+  if (!speaker) return undefined;
+  if (state.spouse && speaker.includes(state.spouse.name)) return state.spouse.age;
+  if (state.rival?.name && speaker.includes(state.rival.name)) return state.rival.age;
+  const d = state.disciples.find((x) => speaker.includes(x.name));
+  return d ? d.age : undefined;
+}
 import { BookOpen, ChevronRight, Info, Sparkles, Swords, X } from 'lucide-react';
 import { sound } from '../engine/sound';
 
@@ -438,7 +448,8 @@ export const EventModal: React.FC<{
           <PixelPortrait
             role={npcRole}
             country={state.country}
-            gender={state.gender}
+            age={npcRole === 'SPOUSE' && state.spouse ? state.spouse.age : speakerAge(state, currentLine.role === 'NPC' ? currentLine.speaker : event.speaker || '')}
+            gender={npcRole === 'SPOUSE' ? spouseGender(state) : state.gender}
             variantHint={currentLine.role === 'NPC' ? currentLine.speaker : event.speaker || event.title}
             size={74}
             active={currentLine.role === 'NPC'}
@@ -500,8 +511,8 @@ export const EventResultModal: React.FC<{
           <PixelPortrait
             role={cur.role === 'NPC' ? notice.npcRole || 'DISCIPLE' : 'HERO'}
             country={state.country}
-            age={state.age}
-            gender={state.gender}
+            age={cur.role === 'NPC' ? speakerAge(state, cur.speaker) : state.age}
+            gender={cur.role === 'NPC' && notice.npcRole === 'SPOUSE' ? spouseGender(state) : state.gender}
             variantHint={cur.speaker || notice.title}
             size={68}
           />

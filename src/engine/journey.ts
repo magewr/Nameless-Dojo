@@ -287,7 +287,10 @@ export function resolveJourneyEvent(s: GameState, ev: ActiveEvent, optionId: str
     }
   }
   if (def.kind === 'HOME') {
-    next = { ...next, flags: { ...next.flags, homeEventLast: { ...(next.flags.homeEventLast || {}), [key]: s.turn } } };
+    // 노년(55+)에 같은 생성형 틀이 몇 번 나왔는지도 센다 (#키) — 노년에는 같은 틀을 두 번까지만
+    const hl = next.flags.homeEventLast || {};
+    const elderCount = s.age >= 55 && !def.elder ? { [`#${key}`]: (hl[`#${key}`] || 0) + 1 } : {};
+    next = { ...next, flags: { ...next.flags, homeEventLast: { ...hl, [key]: s.turn, ...elderCount } } };
     // 생성형 사건은 자주 오므로 명성 보상을 덜어 낸다 (고정된 큰 사건보다 무겁지 않게)
     const gained = next.fame - s.fame;
     if (gained > 0) next = { ...next, fame: s.fame + Math.round(gained * HOME_FAME_MULT) };
@@ -298,16 +301,37 @@ export function resolveJourneyEvent(s: GameState, ev: ActiveEvent, optionId: str
 // ───────── 도장의 생성형 사건 ─────────
 // 같은 틀은 6계절 안에 되풀이되지 않는다. 틀 안의 사람·사연·시절은 매번 새로 뽑는다.
 const HOME_COOLDOWN = 6;
+// 노년(55+)에 같은 도장 생성형 틀(도전장·의뢰·병기상…)이 나올 수 있는 횟수 — 그 자리는 노년의 사건이 채운다
+const ELDER_GENERIC_CAP = 2;
 const HOME_FAME_MULT = 0.65;
+
+function homePool(s: GameState, elder: boolean): Array<[JourneyEventDef, number]> {
+  const last = s.flags.homeEventLast || {};
+  const region = getRegion(regionsForCountry(s.country)[0].id);
+  return ALL_JOURNEY_EVENTS.filter(
+    (d) =>
+      d.kind === 'HOME' &&
+      !!d.elder === elder &&
+      (elder || s.age < 55 || (last[`#${d.key}`] || 0) < ELDER_GENERIC_CAP) &&
+      !(d.once && isDone(s, d.key)) &&
+      (!d.countries || d.countries.includes(s.country)) &&
+      (last[d.key] === undefined || s.turn - last[d.key] >= (d.cooldown ?? HOME_COOLDOWN) * (elder ? 1 : s.age >= 65 ? 2.5 : s.age >= 55 ? 1.75 : 1)) &&
+      triggerMet(d.trigger, s, null, 0) &&
+      (!d.cond || d.cond(s, region))
+  ).map((d) => [d, (d.weight ?? 1) * (d.weightBy ? d.weightBy(s, region) : 1)] as [JourneyEventDef, number]).filter(([, w]) => w > 0);
+}
 
 export function pickHomeEvent(s: GameState): ActiveEvent | null {
   if (s.journey || s.turn < 3) return null;
-  const last = s.flags.homeEventLast || {};
-  const region = getRegion(regionsForCountry(s.country)[0].id);
-  const pool = ALL_JOURNEY_EVENTS.filter(
-    (d) => d.kind === 'HOME' && (last[d.key] === undefined || s.turn - last[d.key] >= (d.cooldown ?? HOME_COOLDOWN)) && triggerMet(d.trigger, s, null, 0) && (!d.cond || d.cond(s, region))
-  );
-  const def = weighted(pool.map((d) => [d, d.weight ?? 1]));
+  const def = weighted(homePool(s, false));
+  if (!def) return null;
+  return toEvent(s, def, { key: def.key, region: null });
+}
+
+// 노년(55세+)의 사건. 도장 생성형 사건과는 따로, 노년 몫의 자리에서만 뽑는다.
+export function pickElderEvent(s: GameState): ActiveEvent | null {
+  if (s.journey || s.age < 55) return null;
+  const def = weighted(homePool(s, true));
   if (!def) return null;
   return toEvent(s, def, { key: def.key, region: null });
 }

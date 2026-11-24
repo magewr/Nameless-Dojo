@@ -718,6 +718,7 @@ export interface GameState {
     journeyCount?: number;
     tourneyHistory?: TourneyRecord[];
     homeEventLast?: Record<string, number>; // 생성형 도장 사건마다 마지막으로 일어난 턴 (같은 틀이 연달아 나오지 않게)
+    abdicated?: { year: number; heirId: string; heirName: string } | null; // 후계자에게 도장을 물려주고 원로(상왕)로 물러났는가
     tutorialDone?: boolean;
     grandmasterWins?: number;
     tournamentWins?: number;

@@ -82,6 +82,31 @@ export function createBattleConfig(
 }
 
 // 매 계절 전환 시 조건에 맞는 스토리/역사/도장깨기/가족/라이벌 이벤트 선택
+// 되풀이되는 고정 사건의 최소 간격(계절). 노년에는 1.5배로 늘린다 — 노년의 자리는 노년의 사건이 채운다.
+const FIXED_EVENT_GAP: Record<string, number> = {
+  disciple_graduate: 3,
+  grad_revisit: 4,
+  disciple_illness: 5,
+  disciple_passing: 4,
+  hero_fever: 4,
+  random_dojo_breaker: 6,
+  random_inspiration: 8,
+  life_festival_demo: 8,
+  life_herb_peddler: 8,
+  life_night_assassin: 8,
+  life_disciple_quarrel: 8,
+  life_wandering_tea: 10,
+  life_famine_tuition: 8,
+  blood_grudge: 4,
+};
+export function fixedGapCooling(state: GameState, baseKey: string, gapOverride?: number): boolean {
+  const gap = gapOverride ?? FIXED_EVENT_GAP[baseKey];
+  if (!gap) return false;
+  const last = state.flags.homeEventLast?.[`@${baseKey}`];
+  if (last === undefined) return false;
+  return state.turn - last < Math.round(gap * (state.age >= 55 ? 1.5 : 1));
+}
+
 export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   const triggered = new Set(state.flags.triggeredEvents);
   const cMeta = COUNTRIES[state.country];
@@ -217,10 +242,22 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       narration: `눈덩이처럼 불어난 빚(${state.debt}${cMeta.currency}) 때문에 전당포 사내들이 몽둥이와 진검을 차고 도장을 에워쌌다.`,
       speaker: '전당포 두목',
       dialogue: '“이제 말로 할 때는 지났다. 도장 집기를 팔아 갚든, 내 밑에서 해결사 노릇을 하든, 아니면 나랑 진검으로 끝장을 보든 골라!”',
-      options: [
-        { id: 'debt_enforcer', label: '해결사 일을 1년간 맡아 빚을 탕감한다', hint: '빚 전액 탕감 · 살기 +20 · 명성 -15' },
-        { id: 'debt_duel', label: '“내 목숨을 걸고 빚을 청산하겠다!” (진검결투)', hint: '⚠ 패배 시 사망/장애 · 승리 시 빚 전액 소멸 + 살기 +30' },
-      ],
+      // 늙은 도장주가 전당포 해결사 노릇을 할 수는 없다 — 예순이 넘으면 제자들이 나서거나 땅을 판다
+      options:
+        state.age >= 62
+          ? [
+              ...(state.disciples.filter((d) => !d.dead && !d.isChild).length >= 2
+                ? [{ id: 'debt_disciples', label: '제자들이 품을 팔아 빚을 갚겠다고 나선다', hint: '빚 전액 탕감 · 한 해 동안 제자들이 고생한다 · 문하생 충성↑' }]
+                : []),
+              ...(state.facilities.yard > 1
+                ? [{ id: 'debt_sell_land', label: '연무장 땅 절반을 팔아 빚을 갚는다', hint: '빚 전액 탕감 · 연무장 1단계 축소' }]
+                : []),
+              { id: 'debt_enforcer', label: '늙은 몸으로 전당포의 해결사 노릇을 한다', hint: '빚 전액 탕감 · 살기 +20 · 명성 -15 · 건강 -8' },
+            ]
+          : [
+              { id: 'debt_enforcer', label: '해결사 일을 1년간 맡아 빚을 탕감한다', hint: '빚 전액 탕감 · 살기 +20 · 명성 -15' },
+              { id: 'debt_duel', label: '“내 목숨을 걸고 빚을 청산하겠다!” (진검결투)', hint: '⚠ 패배 시 사망/장애 · 승리 시 빚 전액 소멸 + 살기 +30' },
+            ],
     };
   }
 
@@ -399,7 +436,11 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
         { speaker: '대회 집행관', role: 'NPC', stageDirection: '붉은 봉랍이 찍힌 대진표를 정중히 펼치며', text: `256강 예선부터 시작해 128강·64강·32강·16강·8강, 그리고 천하 4검이 겨루는 4강과 결승까지 이어지는 대토너먼트요!` },
         { speaker: '대회 집행관', role: 'NPC', text: tourneyScriptText },
       ],
+      // 여름에 심판 초빙을 받아들였다면 올해는 심판석에서 본다
       options: [
+        ...(state.flags.storyMemory?.judge === String(state.year)
+          ? []
+          : [
         {
           id: 'tourney_enter',
           label:
@@ -410,10 +451,13 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
               : `🏆 256강 예선부터 직접 출전한다! (256강 → 4강 천하4검 → 결승)`,
           hint: '공식 비무(현판 보호·사망 없음) · 단계별 상금/명성 · 우승 시 천하 보검 +600!',
         },
+            ]),
         {
           id: 'tourney_watch',
           label:
-            wins >= 1
+            state.flags.storyMemory?.judge === String(state.year)
+              ? '⚖ 약속대로 심판석에 앉아 8강 · 4강 · 결승을 판정한다'
+              : wins >= 1
               ? '👀 귀빈석에서 후학들의 8강 · 4강 · 결승 비무를 지켜본다'
               : isElder
               ? '👀 객석에서 젊은 절정 고수들의 8강 · 4강 · 결승을 감상한다'
@@ -554,7 +598,9 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     };
   }
 
-  if (state.spouse && state.spouse.alive && !state.disciples.some((d) => d.isChild) && state.year >= state.spouse.marriedYear + 2 && Math.random() < 0.45) {
+  // 아이를 낳는 쪽(여성 주인공 또는 아내)이 마흔다섯을 넘었다면 더는 아이 소식이 없다
+  const bearerAge = state.gender === 'FEMALE' ? state.age : state.spouse?.age ?? 99;
+  if (state.spouse && state.spouse.alive && bearerAge <= 44 && !state.disciples.some((d) => d.isChild) && state.year >= state.spouse.marriedYear + 2 && Math.random() < 0.45) {
     const childName = cMeta.childNames[Math.floor(Math.random() * cMeta.childNames.length)];
     const heroIsFemale = state.gender === 'FEMALE';
     return {
@@ -620,7 +666,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   // 5.5 후계자 지명·재지명 — 55세가 넘도록 살아 있는 후계자가 없으면 주기적으로 묻는다.
   // (자녀가 없어 위의 갈등 이벤트가 뜨지 않는 경우, 지명한 후계자를 먼저 잃은 경우, 지명을 미뤄 둔 경우)
   const heirCandidates = state.disciples.filter((d) => !d.dead);
-  const heirAskGap = state.age >= 68 ? 1 : 3;
+  const heirAskGap = state.age >= 68 ? 2 : 3;
   if (
     state.age >= 55 &&
     heirCandidates.length > 0 &&
@@ -655,7 +701,12 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     });
     return {
       id: `heir_appoint_${state.turn}`,
-      title: lostHeir ? '빈 자리 — 후계자를 다시 세워야 한다' : '누구에게 물려줄 것인가',
+      title:
+        state.flags.heirAskedYear !== undefined && state.age >= 68
+          ? `더는 미룰 수 없는 물음 — ${state.age}세의 현판`
+          : lostHeir
+          ? '빈 자리 — 후계자를 다시 세워야 한다'
+          : '누구에게 물려줄 것인가',
       category: 'FAMILY',
       sceneActor: 'DISCIPLE',
       narration: lostHeir
@@ -1295,11 +1346,16 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   }
 
   const recentBases = new Set(state.flags.recentEventBases || []);
-  const isCooling = (baseKey: string) => recentBases.has(baseKey);
+  const isCooling = (baseKey: string) => recentBases.has(baseKey) || fixedGapCooling(state, baseKey);
 
   // ★ 문하생 독립(하산) 이벤트: 26세 이상(후계자 제외) 제자가 세상으로 나가 자신의 길을 걷는다! ★
+  // 사범으로 붙잡아 둔 제자는 한동안 다시 하산을 청하지 않는다 (마흔 가까이 되어서야 드물게)
   const gradCandidate = state.disciples.find(
-    (d) => !d.dead && d.role !== 'HEIR' && d.age >= 26 && Math.random() < (d.age >= 31 ? 0.28 : 0.16)
+    (d) =>
+      !d.dead &&
+      d.role !== 'HEIR' &&
+      d.age >= (d.role === 'INSTRUCTOR' ? 38 : 26) &&
+      Math.random() < (d.role === 'INSTRUCTOR' ? 0.08 : d.age >= 31 ? 0.28 : 0.16)
   );
   if (gradCandidate && !isCooling('disciple_graduate')) {
     const statSum =
@@ -1490,7 +1546,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       id: `disaster_plague_${state.turn}`,
       title: '☠ 고을 대역병(大疫病) 창궐',
       category: 'LIFE',
-      sceneActor: 'SPOUSE',
+      sceneActor: state.spouse?.alive ? 'SPOUSE' : undefined, // 배우자가 없거나 먼저 떠났으면 의원이 말한다
       narration: '시신 싣는 수레가 골목을 지나가는 끔찍한 역병이 고을에 다시 번졌다! 도장 안에도 고열과 구토를 호소하는 이들이 속출한다.',
       speaker: state.spouse?.alive ? state.spouse.name : '동네 의원',
       dialogue: '“사부님, 이번 역병은 지난번보다 훨씬 독합니다! 거액의 약재를 구해도 완치를 장담하기 어렵습니다!”',
@@ -1581,7 +1637,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       id: `hero_fever_${state.turn}`,
       title: state.season === 'WINTER' ? '매서운 겨울의 열병(熱病)' : '지독한 환절기 악성 열병(熱病)',
       category: 'LIFE',
-      sceneActor: 'SPOUSE',
+      sceneActor: state.spouse?.alive ? 'SPOUSE' : undefined, // 배우자가 없거나 먼저 떠났으면 의원이 말한다
       narration: isElder
         ? '매서운 바람이 세월을 먹은 뼈마디 깊숙이 스며든 탓일까. 밤새 오한과 고열이 번갈아 찾아오며 기력이 뚝 떨어졌다.'
         : '찬 바람을 맞으며 수련을 강행한 탓일까. 온몸이 불덩이처럼 달아오르며 식은땀이 멈추지 않는다.',

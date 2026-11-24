@@ -56,6 +56,7 @@ const town = (s: GameState) => rand(byCountry(s, ['읍내', '장터', '나루터
 const challenge: JourneyEventDef = {
   key: 'home_challenge',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 66 ? 0.4 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 10 && s.fame >= 80,
   build: (s) => {
     const roster = (s.tourneyRoster || []).filter((f) => !f.retired && s.year - f.bornYear < 65);
@@ -131,9 +132,13 @@ const COMMISSIONS = [
 const commission: JourneyEventDef = {
   key: 'home_commission',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 66 ? 0.5 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 5,
   build: (s) => {
-    const c = rand(COMMISSIONS);
+    // 사또·이방은 조선의 말 — 나라에 맞게 바꾼다
+    const c0 = rand(COMMISSIONS);
+    const loc = (t: string) => (s.country === 'KOREA' ? t : t.replace(/사또/g, byCountry(s, '사또', '지현', '다이칸')).replace(/관아 이방/g, byCountry(s, '관아 이방', '현청 서리', '다이칸소 하급 관리')));
+    const c = { ...c0, title: loc(c0.title), who: loc(c0.who), ask: loc(c0.ask), fail: loc(c0.fail) };
     const p = clampP(0.35 + (s.stats[c.stat] - 25) * 0.009);
     const d = bestDisciple(s);
     const pd = d ? clampP(0.3 + (d.stats[c.stat] - 25) * 0.009) : 0;
@@ -151,7 +156,9 @@ const commission: JourneyEventDef = {
     };
   },
   resolve: (s, opt, c) => {
-    const def = COMMISSIONS.find((x) => x.k === c.data?.k) || COMMISSIONS[0];
+    const raw = COMMISSIONS.find((x) => x.k === c.data?.k) || COMMISSIONS[0];
+    const loc = (t: string) => (s.country === 'KOREA' ? t : t.replace(/사또/g, byCountry(s, '사또', '지현', '다이칸')).replace(/관아 이방/g, byCountry(s, '관아 이방', '현청 서리', '다이칸소 하급 관리')));
+    const def = { ...raw, who: loc(raw.who), fail: loc(raw.fail) };
     if (opt === 'refuse') return say(addRep(s, { virtue: -2 }), [['나레이션', `${josa(def.who, '이가')} 힘없이 돌아갔다.`]]);
     const isSend = opt === 'send';
     const ok = chance(Number(isSend ? c.data?.pd : c.data?.p));
@@ -161,7 +168,7 @@ const commission: JourneyEventDef = {
     if (ok) {
       n = addRep(addFame(addMoney(n, def.reward), 10), { virtue: 5 });
       if (def.k === 'missing') n = remember(n, 'missing_child', 'FOUND');
-      if (def.k === 'tutor' && chance(0.4)) n = addEcho(n, { key: 'magistrate_son', minYears: 6, maxYears: 12, channel: 'HOME', bornText: '사또의 성미 고약한 도령에게 무예를 가르쳤다' });
+      if (def.k === 'tutor' && chance(0.4)) n = addEcho(n, { key: 'magistrate_son', minYears: 6, maxYears: 12, channel: 'HOME', bornText: loc('사또의 성미 고약한 도령에게 무예를 가르쳤다') });
       return say(n, [['나레이션', `${isSend ? `${josa(findDisc(n, c.data?.did)?.name || '제자', '이가')}` : '내가'} 해냈다. ${josa(def.who, '이가')} 사례로 ${def.reward}${cur(n)}을 내놓았다. (명성 +10)`]]);
     }
     return say(addFame(n, -4), [['나레이션', def.fail]]);
@@ -580,6 +587,7 @@ const echoLoan: JourneyEventDef = {
 const wanted: JourneyEventDef = {
   key: 'home_wanted',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 70 ? 0.1 : s.age >= 60 ? 0.3 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 6,
   build: (s) => {
     const name = makePersonName(s.country);
@@ -664,6 +672,7 @@ const peddler: JourneyEventDef = {
 const kids: JourneyEventDef = {
   key: 'home_kids',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 62 ? 0.5 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 4,
   build: () => ({
     title: '담 너머의 눈동자들',
@@ -679,6 +688,8 @@ const kids: JourneyEventDef = {
   resolve: (s, opt) => {
     if (opt === 'shoo') return say(s, [['나레이션', '아이들이 우르르 흩어졌다. 다음 날에도 담장 위에 머리가 올라왔다.']]);
     let n = addFame(addRep(s, { virtue: 8 }), 8);
+    // 수십 년 뒤, 그 아이들 가운데 하나가 어른이 되어 찾아온다 (노년 사건)
+    if (!s.flags.storyMemory?.taught_kids) n = remember(n, 'taught_kids', String(s.year));
     let extra = '';
     if (hasRoom(n) && chance(0.3)) {
       const d = { ...createDiscipleEntity(n, { isChild: true, isGenius: chance(0.4), childTalent: 'DILIGENT', archetype: '담장을 넘던 동네 아이' }), joinedYear: n.year, temperamentKnown: true };
@@ -690,14 +701,17 @@ const kids: JourneyEventDef = {
 };
 
 // ───────── 12. 시절의 물결 — 그 해의 풍문이 도장 앞까지 온다 ─────────
+const freshRumors = (s: GameState) => rumorsFor(s.country, s.year).filter((r) => !(s.flags.storyMemory?.heard_rumors || '').includes(r.slice(0, 24)));
 const eraWave: JourneyEventDef = {
   key: 'home_era',
   kind: 'HOME',
-  cond: (s) => rumorsFor(s.country, s.year).length > 0,
+  // 이미 들은 풍문은 다시 돌지 않는다
+  cond: (s) => freshRumors(s).length > 0,
   build: (s) => {
-    const rumor = rand(rumorsFor(s.country, s.year));
+    const rumor = rand(freshRumors(s));
     return {
       title: '저잣거리의 풍문',
+      meta: { rumorIdx: rumorsFor(s.country, s.year).indexOf(rumor), rumor: rumor.slice(0, 24) },
       category: 'HISTORICAL',
       narration: rumor,
       script: [N('장에 다녀온 제자가 숨을 몰아쉬며 들어온다.'), P('문하생', rumor, '눈이 휘둥그레져'), P('문하생', '스승님, 우리도 뭔가 해야 하는 것 아닙니까?')],
@@ -708,7 +722,9 @@ const eraWave: JourneyEventDef = {
       ],
     };
   },
-  resolve: (s, opt) => {
+  resolve: (s0, opt, c) => {
+    const heard = s0.flags.storyMemory?.heard_rumors || '';
+    const s = remember(s0, 'heard_rumors', `${heard}|${String(c.data?.rumor || '')}`.slice(-1500));
     if (opt === 'prepare') return say(addMoney(addRep(s, { commerce: 3 }), 25), [['나레이션', '곳간을 정리하고 묵은 곡식을 팔았다. 난리가 와도 한 철은 버틸 것이다. (+25)']]);
     if (opt === 'help') return say(addFame(addRep(addMoney(s, -30), { virtue: 8 }), 10), [['나레이션', '제자들과 함께 쌀을 나르고 무너진 담을 고쳤다. 고을 사람들이 「그 도장 사람들」 이야기를 했다.']]);
     return say(trainEquipped(addRep(s, { ascetic: 5 }), 30), [['나레이션', '세상이 시끄러울수록 마당의 목검 소리는 더 또렷했다.']]);
@@ -719,8 +735,8 @@ const eraWave: JourneyEventDef = {
 const echoMagistrateSon: JourneyEventDef = {
   key: 'echo_magistrate_son',
   kind: 'ECHO_HOME',
-  build: () => ({
-    title: '사또 도령, 무관이 되다',
+  build: (s) => ({
+    title: byCountry(s, '사또 도령, 무관이 되다', '지현의 도련님, 무관이 되다', '다이칸의 도련님, 무사가 되다'),
     category: 'LIFE',
     narration: '말을 탄 젊은 무관이 도장 앞에 내렸다. 울며 뛰쳐나가던 그 도령이다.',
     script: [N('말을 탄 젊은 무관이 도장 앞에 내렸다. 몇 해 전 울며 뛰쳐나가던 그 도령이다.'), P('젊은 무관', '스승님! 그때는 철이 없었습니다. 무과에 급제했습니다. 스승님 덕입니다.', '넙죽 절하며')],
