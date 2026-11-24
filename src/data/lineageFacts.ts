@@ -80,20 +80,22 @@ export interface LineageFacts {
 // 수치를 그대로 비교하면 거의 모든 일생이 인덕으로 끝난다. 그래서 "얻을 수 있는 양에 견주어 얼마나 쌓았는가"로 비교한다.
 // opportunity = 인덕을 1로 둔 그 축의 획득 기회. 이벤트 고정 보상 합계 비율(1 : 0.49 : 0.29 : 0.21 : 0.22)에
 // 수련·호위를 할 때마다 조금씩 쌓이는 몫(구도, 상무)을 더해 잡은 값이다. 이벤트 보상을 손보면 이 값도 함께 고쳐야 한다.
+// 무사수행·도장 생성형 사건이 들어오며 인덕·살기를 얻을 기회가 늘었다. 플레이테스트 봇 150인생의 사망 시 중앙값
+// (인덕 660→823, 구도 424→396, 상무 126→123, 살기 29→89)에 맞춰, 예전 축 사이의 비율이 유지되도록 다시 잡았다.
 // 같은 점수면 앞에 오는 축이 이긴다.
 const AXIS_ORDER: Array<{ axis: ChronicleAxis; key: keyof ReputationAxes; opportunity: number }> = [
   { axis: 'VIRTUE', key: 'virtue', opportunity: 1 },
-  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.65 },
-  { axis: 'COMMERCE', key: 'commerce', opportunity: 0.35 },
-  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.2 },
-  { axis: 'ARCANE', key: 'arcane', opportunity: 0.2 },
+  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.49 },
+  { axis: 'COMMERCE', key: 'commerce', opportunity: 0.27 },
+  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.38 },
+  { axis: 'ARCANE', key: 'arcane', opportunity: 0.16 },
 ];
 // 보조 축으로 인정하는 최소 원점수. 한두 번의 선택으로 "겸비"가 붙지 않게 한다.
 const SECOND_AXIS_MIN_RAW = 30;
 
-// 규모 기준. 한 일생을 끝까지 산 도장의 사망 시 명성은 대개 2,500~3,700이고(플레이테스트 봇 330회 기준),
-// 일찍 죽거나 지옥 난이도면 수백~1,500에 머문다.
-const SCALE_GRAND = { fame: 3000, disciples: 12 };
+// 규모 기준. 무사수행·천하대회 대진표·생성형 사건이 들어온 뒤 한 일생을 끝까지 산 도장의 사망 시 명성은
+// 대개 3,500~5,600이다(플레이테스트 봇 330회 기준, 예전에는 2,500~3,700). 일찍 죽거나 지옥 난이도면 수백~1,500에 머문다.
+const SCALE_GRAND = { fame: 4300, disciples: 12 };
 const SCALE_MEDIUM = { fame: 700, disciples: 3 };
 const FLOURISH_SHARE = 0.28;
 

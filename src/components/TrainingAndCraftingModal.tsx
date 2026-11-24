@@ -4,7 +4,8 @@ import {
   ELEMENT_LABEL,
   evaluateCraft,
   FORM_LABEL,
-  MASTERY_EXP_REQ,
+  getMasteryPct,
+  isAtMasteryWall,
   MASTERY_NAMES,
   WEAPON_GROUP_LABEL,
 } from '../data/booksAndSkills';
@@ -213,8 +214,8 @@ export const TrainingAndCraftingModal: React.FC<Props> = ({
                   const eqA = activeSlotIdx >= 0;
                   const eqP = state.equippedPassiveIds.includes(s.id);
                   const isTrainTarget = state.seasonPlan.trainSkillId === s.id;
-                  const req = MASTERY_EXP_REQ[s.masteryLevel] || 999;
-                  const pct = s.masteryLevel >= 10 ? 100 : Math.min(100, Math.round((s.masteryExp / req) * 100));
+                  const pct = getMasteryPct(s);
+                  const atWall = isAtMasteryWall(s);
 
                   return (
                     <div key={s.id} className={`p-3 border-2 space-y-2 ${eqA ? 'bg-[#332216] border-[#f2c96b]' : eqP ? 'bg-[#172638] border-sky-400' : 'bg-[#1b120c] border-[#5c432c]'}`}>
@@ -242,7 +243,12 @@ export const TrainingAndCraftingModal: React.FC<Props> = ({
                             </div>
                           )}
                           <div className="flex items-center gap-2 text-[11px] text-[#d6cbb8] mt-0.5 whitespace-nowrap">
-                            <span className="text-amber-300">Lv.{s.masteryLevel} {MASTERY_NAMES[s.masteryLevel]}</span>
+                            <span className={s.masteryLevel >= 10 ? 'text-purple-300 font-bold' : 'text-amber-300'}>Lv.{s.masteryLevel} {MASTERY_NAMES[s.masteryLevel]}</span>
+                            {atWall && (
+                              <InGameTooltip title="벽(壁)" body="입신(Lv.9)의 숙련이 가득 찼습니다. 수련·대련으로는 더 오르지 않으며, 계절 계획의 폐관수련으로 깨달음을 쌓아야 극의(Lv.10)에 이를 수 있습니다.">
+                                <span className="text-[10px] px-1 bg-purple-900/70 border border-purple-400/70 text-purple-200 underline decoration-dotted">벽</span>
+                              </InGameTooltip>
+                            )}
                             {!s.isPassive && (
                               <InGameTooltip title="기본 위력 (⚔)" body="초식의 기본 공격력입니다. 숙련도 레벨과 근력·영력·병기 궁합에 따라 실전 피해가 크게 늘어납니다.">
                                 <span className="underline decoration-dotted">⚔{s.power}</span>
@@ -277,7 +283,7 @@ export const TrainingAndCraftingModal: React.FC<Props> = ({
 
                       <div className="flex items-center gap-1.5">
                         <div className="flex-1 h-2 bg-[#120c08] border border-[#6b4728]">
-                          <div className="h-full bg-[#c93b2b]" style={{ width: `${pct}%` }} />
+                          <div className={`h-full ${atWall || s.masteryLevel >= 10 ? 'bg-purple-500' : 'bg-[#c93b2b]'}`} style={{ width: `${pct}%` }} />
                         </div>
                         <button
                           onClick={() => {
@@ -290,7 +296,7 @@ export const TrainingAndCraftingModal: React.FC<Props> = ({
                           <Eye className="w-3 h-3 text-sky-300" /> 상세·시연
                         </button>
                         <button
-                          disabled={s.masteryLevel >= 10}
+                          disabled={s.masteryLevel >= 10 || atWall}
                           onClick={() => { sound.playClick(); onSelectTrainSkill(s.id); }}
                           className={`px-2 py-1 text-[11px] font-bold disabled:opacity-40 cursor-pointer shrink-0 flex items-center gap-1 ${
                             isTrainTarget ? 'bg-amber-600 text-white border border-[#fde047]' : 'rpg-btn'

@@ -5,6 +5,8 @@ import {
   FORM_LABEL,
   MASTERY_NAMES,
   WEAPON_GROUP_LABEL,
+  TRANSCEND_AURA_SUMMARY,
+  TRANSCEND_SUMMARY,
 } from './booksAndSkills';
 
 export const STAT_GUIDE: Array<{ key: keyof GameState['stats']; abbr: string; name: string; desc: string }> = [
@@ -127,7 +129,7 @@ export function getWorldLoreArticles(state: GameState): LoreArticle[] {
       title: '초식 연마 · 3/6/9 각인 · 조합',
       subtitle: '같은 횡베기라도 어떻게 갈고닦느냐에 따라 전혀 다른 검이 된다',
       body: [
-        '모든 초식은 Lv.1(입문)부터 Lv.10(신화/극의)까지 성장합니다. 숙련도가 오를수록 위력뿐 아니라 비무 시 검기의 크기, 잔상, 연격 모션까지 극적으로 진화합니다.',
+        '모든 초식은 Lv.1(입문)부터 Lv.9(입신)까지 수련으로 성장하고, 그 너머 Lv.10 극의는 폐관수련으로만 열립니다. 강호의 어떤 고수도 극의에 이르지 못했습니다. 숙련도가 오를수록 위력뿐 아니라 비무 시 검기의 크기, 잔상, 연격 모션까지 극적으로 진화합니다.',
         'Lv.3·Lv.6·Lv.9에 도달하면 고유 연마 특성을 각인할 수 있으며, [무술 조합]으로 두 초식의 장점을 융합해 세상에 하나뿐인 유파 비기를 창시할 수 있습니다.',
       ],
     },
@@ -229,7 +231,8 @@ export function getWeaponAppraisal(weapon: Weapon): {
 }
 
 export function getMasteryEvolutionDesc(level: number): string {
-  if (level >= 9) return `Lv.${level} (${MASTERY_NAMES[level]}) — 극의 경지: 먹물 일섬 암전, 3중 잔상, 거대 검기 파동 발현`;
+  if (level >= 10) return `Lv.10 (${MASTERY_NAMES[10]}) — 세상에 나 하나뿐인 경지: ${TRANSCEND_SUMMARY}. ${TRANSCEND_AURA_SUMMARY}. 제자에게 Lv.6으로 전수`;
+  if (level >= 9) return `Lv.${level} (${MASTERY_NAMES[level]}) — 입신 경지: 먹물 일섬 암전, 3중 잔상, 거대 검기 파동 발현. 이 너머는 폐관수련으로만 열린다`;
   if (level >= 6) return `Lv.${level} (${MASTERY_NAMES[level]}) — 대성 경지: 대형 검기, 2중 잔상, 다중 참격선 및 오의 컷인 발현`;
   if (level >= 3) return `Lv.${level} (${MASTERY_NAMES[level]}) — 숙달 경지: 기 모음 오라, 1중 잔상, 선명한 강철 검기 발현`;
   return `Lv.${level} (${MASTERY_NAMES[level]}) — 입문 경지: 기본 동작과 은백 검기. 수련을 거듭할수록 이펙트와 연격이 진화합니다.`;

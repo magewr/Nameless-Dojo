@@ -44,6 +44,10 @@ import { TitleScreen } from './components/TitleScreen';
 import { CharacterCreate } from './components/CharacterCreate';
 import { PrologueView } from './components/PrologueView';
 import { DojoSimView } from './components/DojoSimView';
+import { JourneyView } from './components/JourneyView';
+import { TournamentView } from './components/TournamentView';
+import { closeTourney, nextQualifier, simulatePendingMatches, startHeroMatch, watchMatch } from './engine/tourney';
+import { enterLeg, finishJourney, openPoi, startJourney, syncWalk } from './engine/journey';
 import { AutoBattleView } from './components/AutoBattleView';
 import { TrainingAndCraftingModal } from './components/TrainingAndCraftingModal';
 import { DojoAndWeaponsModal } from './components/DojoAndWeaponsModal';
@@ -127,7 +131,7 @@ export function App() {
   // PM2 실시간 계절 타임라인 타이머 (활동 1 → [도중 주요 이벤트 인터럽트!] → 남은 활동 이어서 진행 → 다음 계절!)
   useEffect(() => {
     if (!isRunningSeason || !state) return;
-    if (state.phase !== 'MAIN' || state.activeEvent || eventResultNotice || state.pendingTraitSkillId) return;
+    if (state.phase !== 'MAIN' || state.activeEvent || eventResultNotice || state.pendingTraitSkillId || state.tourney) return;
 
     const q = runQueueRef.current;
     if (!q) {
@@ -210,7 +214,7 @@ export function App() {
         const summary: SeasonSummaryData = {
           year: q.startYear,
           season: q.startSeason,
-          activitiesDone: q.activities,
+          activitiesDone: Array.from(new Set(q.activities)),
           moneyDelta: state.money - q.startMoney,
           fameDelta: state.fame - q.startFame,
           healthDelta: state.health - q.startHealth,
@@ -275,10 +279,14 @@ export function App() {
         onFinish={(outcome: BattleOutcomePayload) => {
           const prev = state;
           const next = applyBattleOutcome(prev, outcome);
-          setState(next);
+          setState({ ...next, pendingNotice: null });
           // 사망 엔딩이 아니라면 전투 후일담 표시! (진검전투 승리 후 사후 처분 이벤트가 바로 이어지면 중복 모달 없이 처분 이벤트로 직행)
           if (next.phase === 'MAIN' && !next.activeEvent) {
             const conc = buildBattleConclusionNotice(prev, next, activeBattle, outcome);
+            if (next.pendingNotice && next.pendingNotice.length > 0) {
+              setEventResultNotice({ title: activeBattle.title, npcRole: 'RIVAL', lines: next.pendingNotice, badges: conc.badges });
+              return;
+            }
             const splitLines = conc.body
               .split('\n')
               .map((s) => s.trim())
@@ -320,23 +328,32 @@ export function App() {
 
   const handleStartSeason = () => {
     if (state.seasonPlan.activities.length === 0) return;
+    // 무사수행은 타임라인 대신 필드 화면에서 직접 걷는다.
+    if (state.seasonPlan.activities.includes('JOURNEY')) {
+      sound.playClick();
+      setState(startJourney(state, state.seasonPlan.journeyRegionId));
+      return;
+    }
+    // 폐관수련은 계절 전체를 쓰는 단독 작업 — 초순·중순·하순 세 번에 나눠 진행하고, 계절 중 바깥 사건은 닿지 않는다.
+    const isSeclusion = state.seasonPlan.activities.includes('SECLUSION');
+    const runActs: ScheduleActivityId[] = isSeclusion ? ['SECLUSION', 'SECLUSION', 'SECLUSION'] : [...state.seasonPlan.activities];
     const wMap: Record<string, number> = {};
     let totalW = 0;
-    state.seasonPlan.activities.forEach((act) => {
-      const w = Math.max(1, Math.min(4, state.seasonPlan.weights?.[act] || 1));
+    runActs.forEach((act) => {
+      const w = isSeclusion ? 1 : Math.max(1, Math.min(4, state.seasonPlan.weights?.[act] || 1));
       wMap[act] = w;
       totalW += w;
     });
-    const actCount = state.seasonPlan.activities.length;
+    const actCount = runActs.length;
     // 계절 타임라인 중간 지점(1개면 1번째 직후, 2~4개면 절반 지점!)에 주요 이벤트 인터럽트 배치!
     const midAfter = Math.max(1, Math.ceil(actCount / 2));
     runQueueRef.current = {
-      activities: [...state.seasonPlan.activities],
+      activities: runActs,
       weights: wMap,
       totalWeight: totalW,
       stepIdx: 0,
       midEventAfterStep: midAfter,
-      midEventChecked: false,
+      midEventChecked: isSeclusion,
       startMoney: state.money,
       startFame: state.fame,
       startHealth: state.health,
@@ -380,7 +397,9 @@ export function App() {
     const cost = getFacilityUpgradeCost(FACILITY_INFO[key].costs[lv], state);
     if (state.money < cost) return;
     const targetName = FACILITY_INFO[key].stages[lv];
-    const acts = state.seasonPlan.activities.includes('BUILD')
+    const acts = state.seasonPlan.activities.some((a) => a === 'SECLUSION' || a === 'JOURNEY')
+      ? (['BUILD'] as ScheduleActivityId[])
+      : state.seasonPlan.activities.includes('BUILD')
       ? state.seasonPlan.activities
       : state.seasonPlan.activities.length < 4
       ? [...state.seasonPlan.activities, 'BUILD' as ScheduleActivityId]
@@ -484,8 +503,22 @@ export function App() {
 
   const pendingTraitSkill = state.pendingTraitSkillId ? state.skills.find((s) => s.id === state.pendingTraitSkillId) : null;
 
+  const journeyOverlay = !!(state.activeEvent || eventResultNotice || pendingTraitSkill || state.pendingBattle);
+
   return (
     <>
+      {state.journey ? (
+        <JourneyView
+          key={`${state.journey.regionId}_${state.flags.journeyCount || 0}`}
+          state={state}
+          hasOverlay={journeyOverlay}
+          onSceneReady={() => setSceneReady(true)}
+          onSync={(x, walked) => setState((prev) => (prev && prev.journey ? syncWalk(prev, x, walked) : prev))}
+          onInteract={(poiId) => setState((prev) => (prev && prev.journey && !prev.activeEvent ? openPoi(prev, poiId) : prev))}
+          onChooseLeg={(legId) => setState((prev) => (prev && prev.journey ? enterLeg(prev, legId) : prev))}
+          onFinish={() => setState((prev) => (prev && prev.journey ? finishJourney(prev) : prev))}
+        />
+      ) : (
       <DojoSimView
         state={state}
         isRunningSeason={isRunningSeason}
@@ -515,6 +548,7 @@ export function App() {
           setCreating(false);
         }}
       />
+      )}
 
       {trainModalTab && (
         <TrainingAndCraftingModal
@@ -522,7 +556,9 @@ export function App() {
           initialTab={trainModalTab}
           onClose={() => setTrainModalTab(null)}
           onSelectTrainSkill={(sId) => {
-            const acts = state.seasonPlan.activities.includes('TRAIN')
+            const acts = state.seasonPlan.activities.some((a) => a === 'SECLUSION' || a === 'JOURNEY')
+      ? (['TRAIN'] as ScheduleActivityId[])
+      : state.seasonPlan.activities.includes('TRAIN')
               ? state.seasonPlan.activities
               : state.seasonPlan.activities.length < 4
               ? [...state.seasonPlan.activities, 'TRAIN' as ScheduleActivityId]
@@ -532,7 +568,9 @@ export function App() {
           onToggleEquipActive={handleToggleActive}
           onToggleEquipPassive={handleTogglePassive}
           onStartCraftProject={(aId, bId, customName) => {
-            const acts = state.seasonPlan.activities.includes('CRAFT')
+            const acts = state.seasonPlan.activities.some((a) => a === 'SECLUSION' || a === 'JOURNEY')
+      ? (['CRAFT'] as ScheduleActivityId[])
+      : state.seasonPlan.activities.includes('CRAFT')
               ? state.seasonPlan.activities
               : state.seasonPlan.activities.length < 4
               ? [...state.seasonPlan.activities, 'CRAFT' as ScheduleActivityId]
@@ -550,7 +588,9 @@ export function App() {
             );
           }}
           onSelectDecodeBook={(bId) => {
-            const acts = state.seasonPlan.activities.includes('DECODE')
+            const acts = state.seasonPlan.activities.some((a) => a === 'SECLUSION' || a === 'JOURNEY')
+      ? (['DECODE'] as ScheduleActivityId[])
+      : state.seasonPlan.activities.includes('DECODE')
               ? state.seasonPlan.activities
               : state.seasonPlan.activities.length < 4
               ? [...state.seasonPlan.activities, 'DECODE' as ScheduleActivityId]
@@ -595,7 +635,9 @@ export function App() {
           state={state}
           onClose={() => setShowDisciplesModal(false)}
           onTeachAll={() => {
-            const acts = state.seasonPlan.activities.includes('TEACH')
+            const acts = state.seasonPlan.activities.some((a) => a === 'SECLUSION' || a === 'JOURNEY')
+      ? (['TEACH'] as ScheduleActivityId[])
+      : state.seasonPlan.activities.includes('TEACH')
               ? state.seasonPlan.activities
               : state.seasonPlan.activities.length < 4
               ? [...state.seasonPlan.activities, 'TEACH' as ScheduleActivityId]
@@ -642,7 +684,7 @@ export function App() {
           onSelect={(optId) => {
             const ev = state.activeEvent!;
             const next = resolveEventOption(state, ev, optId);
-            setState(next);
+            setState({ ...next, pendingNotice: null });
             // 전투 직행이 아니면 선택 결과 안내 메시지와 변화량 뱃지를 여운 있게 보여줌!
             if (next.phase === 'MAIN') {
               const currency = COUNTRIES[state.country].currency;
@@ -693,7 +735,9 @@ export function App() {
                 title: ev.title,
                 npcRole,
                 lines:
-                  customOutcome && customOutcome.length > 0
+                  next.pendingNotice && next.pendingNotice.length > 0
+                    ? next.pendingNotice
+                    : customOutcome && customOutcome.length > 0
                     ? customOutcome
                     : [{ speaker: '나레이션', role: 'NARRATOR', text: latestLogText }],
                 badges: [...preBattleBadges, ...badges],
@@ -729,6 +773,17 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {state.tourney && !state.pendingBattle && !state.activeEvent && (
+        <TournamentView
+          state={state}
+          onQualifier={() => setState((prev) => (prev ? nextQualifier(prev) : prev))}
+          onFightHero={() => setState((prev) => (prev ? startHeroMatch(prev) : prev))}
+          onWatch={(id) => setState((prev) => (prev ? watchMatch(prev, id) : prev))}
+          onSimRest={() => setState((prev) => (prev ? simulatePendingMatches(prev) : prev))}
+          onClose={() => setState((prev) => (prev ? closeTourney(prev) : prev))}
+        />
       )}
 
       {pendingTraitSkill && pendingTraitSkill.pendingTraitTier && (

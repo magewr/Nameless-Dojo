@@ -4,7 +4,7 @@ import { GameState, Skill } from '../types/game';
 import {
   ELEMENT_LABEL,
   FORM_LABEL,
-  MASTERY_EXP_REQ,
+  getMasteryPct,
   MASTERY_NAMES,
   WEAPON_GROUP_LABEL,
 } from '../data/booksAndSkills';
@@ -375,7 +375,7 @@ export const SkillPreviewCanvas: React.FC<{
               ctx.font = 'bold 13px "Noto Serif KR", NeoDunggeunmo, serif';
               ctx.fillStyle = '#fde047';
               ctx.textAlign = 'center';
-              ctx.fillText(`극의 절명 반격 · 【${nm}】`, W / 2, 17);
+              ctx.fillText(`${skill.masteryLevel >= 10 ? '극의 ' : ''}절명 반격 · 【${nm}】`, W / 2, 17);
             } else {
               const fade = Math.max(0, 1 - (el - 480) / 200);
               ctx.fillStyle = `rgba(255, 245, 235, ${fade * 0.9})`;
@@ -458,8 +458,7 @@ export const SkillDetailModal: React.FC<{
       ? Shield
       : Swords;
 
-  const req = MASTERY_EXP_REQ[skill.masteryLevel] || 999;
-  const pct = skill.masteryLevel >= 10 ? 100 : Math.min(100, Math.round((skill.masteryExp / req) * 100));
+  const pct = getMasteryPct(skill);
   const cleanSect = state.sectName.replace(/\(.*?\)/g, '').trim() || '무명류';
 
   const statusLabelMap: Record<string, string> = {

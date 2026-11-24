@@ -1,5 +1,5 @@
 import { BattleConfig, CountryId, EnemyAiType, GameState, Skill, Stats, WeaponGroup } from '../types/game';
-import { BOOK_SKILL_TEMPLATES, createBaseSkills, SIGNATURE_RECIPES } from './booksAndSkills';
+import { BOOK_SKILL_TEMPLATES, createBaseSkills, MASTERY_WALL_LEVEL, SIGNATURE_RECIPES } from './booksAndSkills';
 import { ALL_WEAPONS_CATALOG } from './weapons';
 
 export interface TournamentRoundDef {
@@ -18,10 +18,10 @@ export const TOURNAMENT_ROUNDS: TournamentRoundDef[] = [
   { round: 2, label: '128강', tierTitle: '예선 2회전', fixedScale: 0.9, expectedFame: 55, winMoney: 25, winFame: 14, skillLevel: 3 },
   { round: 3, label: '64강', tierTitle: '본선 1회전', fixedScale: 1.22, expectedFame: 110, winMoney: 40, winFame: 22, skillLevel: 5 },
   { round: 4, label: '32강', tierTitle: '본선 2회전', fixedScale: 1.58, expectedFame: 200, winMoney: 65, winFame: 32, skillLevel: 6 },
-  { round: 5, label: '16강', tierTitle: '본선 16강', fixedScale: 1.95, expectedFame: 340, winMoney: 100, winFame: 48, skillLevel: 7 },
-  { round: 6, label: '8강', tierTitle: '천하 8대 고수전', fixedScale: 2.35, expectedFame: 520, winMoney: 160, winFame: 72, skillLevel: 8 },
-  { round: 7, label: '4강', tierTitle: '천하 4검(四劍) 결정전', fixedScale: 2.85, expectedFame: 780, winMoney: 260, winFame: 115, skillLevel: 9 },
-  { round: 8, label: '결승전', tierTitle: '천하제일 무신 결정전', fixedScale: 3.35, expectedFame: 1100, winMoney: 600, winFame: 220, skillLevel: 10 },
+  { round: 5, label: '16강', tierTitle: '본선 16강', fixedScale: 1.95, expectedFame: 340, winMoney: 100, winFame: 36, skillLevel: 7 },
+  { round: 6, label: '8강', tierTitle: '천하 8대 고수전', fixedScale: 2.35, expectedFame: 520, winMoney: 160, winFame: 52, skillLevel: 8 },
+  { round: 7, label: '4강', tierTitle: '천하 4검(四劍) 결정전', fixedScale: 2.85, expectedFame: 780, winMoney: 200, winFame: 80, skillLevel: 9 },
+  { round: 8, label: '결승전', tierTitle: '천하제일 무신 결정전', fixedScale: 3.35, expectedFame: 1100, winMoney: 400, winFame: 160, skillLevel: 9 },
 ];
 
 export function getTournamentName(country: CountryId): string {
@@ -36,7 +36,7 @@ export function getTournamentVenue(country: CountryId): string {
   return '한양 훈련원 특설 비무대';
 }
 
-function buildMasterSkill(id: string, level: number, withApexTraits = false): Skill {
+export function buildMasterSkill(id: string, level: number, withApexTraits = false): Skill {
   const sig = SIGNATURE_RECIPES.find((r) => r.result.id === id)?.result;
   const tpl = sig || BOOK_SKILL_TEMPLATES[id] || createBaseSkills()[0];
   const imprintedTraits: Skill['imprintedTraits'] = [];
@@ -70,21 +70,21 @@ function buildMasterSkill(id: string, level: number, withApexTraits = false): Sk
     imprintedTraits.push({
       tier: 9,
       id: `t_apex_${id}`,
-      label: '【입신 극의】',
-      description: '극의 위력 상승',
+      label: '【입신 절초】',
+      description: '입신 위력 상승',
       effect: { damageMult: 1.25, postureMult: 1.5 },
     });
   }
   return {
     creator: '천하 절정',
     ...tpl,
-    masteryLevel: level,
+    masteryLevel: Math.min(level, MASTERY_WALL_LEVEL), // 극의는 주인공만의 경지 — 천하제일도 입신까지다
     masteryExp: 0,
     imprintedTraits,
   };
 }
 
-interface RosterEntry {
+export interface RosterEntry {
   name: string;
   sect: string;
   age: number;
@@ -94,7 +94,7 @@ interface RosterEntry {
   gender?: 'MALE' | 'FEMALE';
 }
 
-function getOpponentForRound(country: CountryId, round: number): RosterEntry {
+export function getOpponentForRound(country: CountryId, round: number): RosterEntry {
   const rosters: Record<CountryId, RosterEntry[]> = {
     KOREA: [
       { name: '경기 포졸 무인', sect: '수원 소도장', age: 23, ai: 'AGGRESSIVE', weapon: 'BLADE', skills: ['base_h_slash', 'base_v_slash'] },
@@ -239,7 +239,7 @@ export function createTournamentSpectatorBattle(state: GameState, round: 6 | 7 |
   return {
     id: `tourney_spec_r${round}_${state.year}`,
     title: `[객석 관전] ${tName} · ${rDef.label}`,
-    subtitle: `${rDef.tierTitle} — 천하 절정 고수들의 극의 비무를 직접 감상합니다`,
+    subtitle: `${rDef.tierTitle} — 천하 절정 고수들의 비무를 직접 감상합니다`,
     isRealDuel: false,
     isTournament: true,
     tournamentRound: round,

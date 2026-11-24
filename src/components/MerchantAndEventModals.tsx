@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActiveEvent, Book, GameState, ImprintedTrait, MerchantOffer, SceneDialogueLine, Skill, Weapon } from '../types/game';
 import { COUNTRIES } from '../data/worldAndEndings';
-import { ELEMENT_LABEL, FORM_LABEL, getTraitCandidates, MASTERY_NAMES, WEAPON_GROUP_LABEL } from '../data/booksAndSkills';
+import { ELEMENT_LABEL, FORM_LABEL, getTraitCandidates, MASTERY_NAMES, TRANSCEND_SUMMARY, WEAPON_GROUP_LABEL } from '../data/booksAndSkills';
 import { getMerchantBookAppraisal, getWeaponAppraisal } from '../data/worldLore';
 import { buildShortLinesFromLegacy } from '../data/storyScripts';
 import { PixelPortrait } from './PixelPortrait';
@@ -291,9 +291,11 @@ export const EventModal: React.FC<{
 }> = ({ event, state, sceneReady, onSelect }) => {
   const lines = useMemo(() => buildShortLinesFromLegacy(event, state.name), [event, state.name]);
   const [lineIdx, setLineIdx] = useState(0);
+  const [illustrationFailed, setIllustrationFailed] = useState(false);
 
   useEffect(() => {
     setLineIdx(0);
+    setIllustrationFailed(false);
   }, [event.id]);
 
   const currentLine = lines[Math.min(lineIdx, lines.length - 1)];
@@ -353,6 +355,18 @@ export const EventModal: React.FC<{
         <span className="text-xs text-[#fde68a] font-bold">사건 · {event.title}</span>
         <span className="text-[11px] text-[#c7b394]">{lineIdx + 1} / {lines.length}</span>
       </div>
+
+      {event.illustration && !illustrationFailed && (
+        <div className="fixed top-14 inset-x-0 flex justify-center px-3 pointer-events-none">
+          <img
+            src={event.illustration}
+            alt=""
+            onError={() => setIllustrationFailed(true)}
+            className="max-h-[38vh] max-w-3xl w-full object-cover border-2 border-[#8c6239] shadow-2xl animate-ink"
+            style={{ imageRendering: 'pixelated' }}
+          />
+        </div>
+      )}
 
       <div className="max-w-3xl w-full mx-auto space-y-2.5 animate-ink">
         {isLastLine && lineFinished && (
@@ -554,11 +568,15 @@ export const TraitSelectModal: React.FC<{
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
       <div className="rpg-window max-w-xl w-full p-5 sm:p-6 space-y-4 animate-ink">
         <div className="text-center border-b-2 border-[#8c6239] pb-3">
-          <span className="seal-badge text-xs px-2.5 py-0.5">{tier}단계 경지 돌파 · 연마 각인</span>
+          <span className="seal-badge text-xs px-2.5 py-0.5">{tier === 10 ? '극의(極意) 돌파 · 극의 각인' : `${tier}단계 경지 돌파 · 연마 각인`}</span>
           <h3 className="text-xl sm:text-2xl font-bold text-[#fde68a] mt-2">
             「{skill.customName || skill.name}」 {MASTERY_NAMES[tier]} 각성
           </h3>
-          <p className="text-xs text-[#d6cbb8] mt-1">이 초식의 평생 성질을 결정할 각인 1가지를 선택하세요.</p>
+          <p className="text-xs text-[#d6cbb8] mt-1">
+            {tier === 10
+              ? `세상에 나 하나뿐인 경지에 올랐습니다 — ${TRANSCEND_SUMMARY}. 마지막 각인 1가지를 새기세요.`
+              : '이 초식의 평생 성질을 결정할 각인 1가지를 선택하세요.'}
+          </p>
         </div>
 
         <div className="space-y-2.5">

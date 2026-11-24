@@ -1,6 +1,7 @@
 import { BattleConfig, CountryId, GameState, Gender, Skill, Stats } from '../types/game';
-import { BOOK_SKILL_TEMPLATES, createBaseSkills, SIGNATURE_RECIPES } from '../data/booksAndSkills';
+import { BOOK_SKILL_TEMPLATES, createBaseSkills, getTraitCandidates, SIGNATURE_RECIPES, transcendSkill } from '../data/booksAndSkills';
 import { createBattleConfig } from '../data/events';
+import { createTournamentBattle } from '../data/tournament';
 import { ALL_WEAPONS_CATALOG } from '../data/weapons';
 import { createNewGame } from '../engine/gameLogic';
 
@@ -29,6 +30,8 @@ export interface BattlePreviewPreset {
     hp?: number;
   };
   realDuel?: boolean;
+  heroTranscend?: number; // 앞에서부터 이만큼의 초식을 폐관 돌파처럼 극의로 올린다 (극의 각인 첫 후보 포함)
+  tournamentRound?: number; // 지정하면 적을 천하대회 해당 회전 상대로 바꾼다 (8 = 결승)
 }
 
 export const BATTLE_PREVIEW_PRESETS: BattlePreviewPreset[] = [
@@ -88,6 +91,32 @@ export const BATTLE_PREVIEW_PRESETS: BattlePreviewPreset[] = [
       hp: 700,
     },
   },
+  // 극의 보상 비교용: 같은 고수가 천하대회 결승 상대와 붙는다. 하나는 전부 입신(Lv.9), 하나는 주력 1식만 극의.
+  {
+    id: 'final_lv9',
+    label: '결승 · 입신 고수',
+    desc: '전 초식 Lv.9 vs 천하제일',
+    heroAge: 48,
+    heroLevel: 9,
+    heroStat: 75,
+    heroSkills: ['sig_issen', 'sig_behead', 'sig_mountain_split', 'sk_cn_03', 'sig_flash_draw'],
+    heroWeaponGroup: 'BLADE',
+    enemy: { name: '천하제일', title: '결승 상대', age: 56, ai: 'DUELIST', scale: 3.35, weapon: 'BLADE', skills: [] },
+    tournamentRound: 8,
+  },
+  {
+    id: 'final_x1',
+    label: '결승 · 극의 1식',
+    desc: '주력 1식만 극의 vs 천하제일',
+    heroAge: 48,
+    heroLevel: 9,
+    heroStat: 75,
+    heroSkills: ['sig_issen', 'sig_behead', 'sig_mountain_split', 'sk_cn_03', 'sig_flash_draw'],
+    heroWeaponGroup: 'BLADE',
+    enemy: { name: '천하제일', title: '결승 상대', age: 56, ai: 'DUELIST', scale: 3.35, weapon: 'BLADE', skills: [] },
+    tournamentRound: 8,
+    heroTranscend: 1,
+  },
   {
     id: 'element',
     label: '원소 술법전',
@@ -137,7 +166,12 @@ export function buildBattlePreview(preset: BattlePreviewPreset, country: Country
   const skills = preset.heroSkills
     .map(findSkill)
     .filter((s): s is Skill => !!s)
-    .map((s) => ({ ...s, masteryLevel: preset.heroLevel, masteryExp: 0, imprintedTraits: s.imprintedTraits || [] }));
+    .map((s) => ({ ...s, masteryLevel: preset.heroLevel, masteryExp: 0, imprintedTraits: s.imprintedTraits || [] }))
+    .map((s, i) => {
+      if (i >= (preset.heroTranscend || 0)) return s;
+      const t = transcendSkill(s);
+      return { ...t, imprintedTraits: [...t.imprintedTraits, getTraitCandidates(t, 10)[0]], pendingTraitTier: undefined };
+    });
   const weapon =
     ALL_WEAPONS_CATALOG.filter((w) => w.group === preset.heroWeaponGroup).sort((a, b) => b.attack - a.attack)[preset.heroLevel >= 8 ? 0 : 2] ||
     base.weapons[0];
@@ -160,6 +194,13 @@ export function buildBattlePreview(preset: BattlePreviewPreset, country: Country
     battleTactic: 'BALANCED',
   };
   const e = preset.enemy;
+  if (preset.tournamentRound) {
+    const tb = createTournamentBattle(state, preset.tournamentRound);
+    return {
+      state,
+      battle: { ...tb, title: `미리보기 — ${preset.label}`, subtitle: preset.desc, rewardMoney: 0, rewardFame: 0, canUseDisciple: false },
+    };
+  }
   const battle = createBattleConfig(
     `preview_${preset.id}_${Date.now()}`,
     `미리보기 — ${preset.label}`,

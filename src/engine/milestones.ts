@@ -20,6 +20,7 @@ const REPEAT_LIMIT: Record<string, number> = {
   HEIR_NAMED: 3,
   HEIR_LOST: 2,
   HEIRLOOM: 2,
+  TRANSCENDENCE: 3,
 };
 
 const MEMORY_TEXT: Record<string, Record<string, string>> = {
@@ -64,6 +65,13 @@ export function diffMilestones(prev: GameState, next: GameState): LifeMilestone[
     const made = next.skills.find((s) => s.parents && !prev.skills.some((p) => p.id === s.id));
     add('FIRST_CRAFT', made ? `첫 독자 초식 ${josa(`「${made.customName || made.name}」`, '을를')} 창안했다` : '첫 독자 초식을 창안했다');
   }
+
+  next.skills.forEach((s) => {
+    const before = prev.skills.find((p) => p.id === s.id);
+    if (s.masteryLevel >= 10 && before && before.masteryLevel < 10) {
+      add('TRANSCENDENCE', `폐관 끝에 ${josa(`「${s.customName || s.name}」`, '을를')} 극의(極意)에 올려놓았다`);
+    }
+  });
 
   if (!prev.spouse && next.spouse) add('MARRIED', `${next.spouse.occupation} ${josa(next.spouse.name, '과와')} 혼례를 올렸다`);
 

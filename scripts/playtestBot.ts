@@ -16,6 +16,7 @@ import {
   createBaseSkills,
   evaluateCraft,
   getTraitCandidates,
+  isAtMasteryWall,
   SIGNATURE_RECIPES,
 } from '../src/data/booksAndSkills';
 import { MINOR_EVENTS } from '../src/data/minorEvents';
@@ -28,6 +29,86 @@ import { isTroublemaker } from '../src/data/temperament';
 import { VIGNETTES } from '../src/data/chronicleVignettes';
 import { BattleTactic, CountryId, DifficultyId, DojoFacilities, GameState, ScheduleActivityId, Skill } from '../src/types/game';
 import { getFacilityUpgradeCost } from '../src/data/balanceRules';
+import { runJourneyHeadless } from '../src/engine/journey';
+import { runTourneyHeadless } from '../src/engine/tourney';
+const tStats = { tourneys: 0, results: new Map<string, number>() };
+import { regionsForCountry } from '../src/data/journeyRegions';
+import { ActiveEvent } from '../src/types/game';
+
+// 명성·돈 출처 장부 (전략 테스트 일생 합계)
+const ledger = new Map<string, { money: number; fame: number }>();
+let ledgerLives = 0;
+function book(cat: string, before: GameState, after: GameState) {
+  const e = ledger.get(cat) || { money: 0, fame: 0 };
+  e.money += after.money - before.money - (after.debt - before.debt);
+  e.fame += after.fame - before.fame;
+  ledger.set(cat, e);
+}
+function evCategory(ev: ActiveEvent): string {
+  const k = typeof ev.meta?.jrKey === 'string' ? String(ev.meta.jrKey) : ev.id;
+  if (k.startsWith('echo_')) return '사건:메아리';
+  if (k.startsWith('home_')) return `사건:생성형 ${k.replace('home_', '')}`;
+  if (k.startsWith('grand_tournament')) return '사건:대회 입장';
+  return `사건:${k.replace(/_\d+.*$/, '').replace(/_[a-z0-9]{6,}$/i, '')}`;
+}
+
+// 사건 다양성: 한 일생에서 본 사건 수, 서로 다른 사건 수, 가장 흔한 사건의 비중
+const vStats = { lives: 0, events: 0, unique: 0, seasons: 0, topShare: 0, global: new Map<string, number>() };
+function eventBase(ev: ActiveEvent): string {
+  if (typeof ev.meta?.jrKey === 'string') return String(ev.meta.jrKey) + (ev.meta?.k ? `:${ev.meta.k}` : '');
+  return ev.id.replace(/_[a-z0-9]*\d[a-z0-9]*$/i, '').replace(/_\d+$/, '');
+}
+function recordVariety(list: string[], turns: number) {
+  vStats.lives++;
+  vStats.events += list.length;
+  vStats.seasons += turns;
+  const m = new Map<string, number>();
+  list.forEach((k) => m.set(k, (m.get(k) || 0) + 1));
+  vStats.unique += m.size;
+  vStats.topShare += list.length ? Math.max(...m.values()) / list.length : 0;
+  m.forEach((v, k) => vStats.global.set(k, (vStats.global.get(k) || 0) + v));
+}
+
+// 무사수행 통계
+const jStats = { journeys: 0, events: new Map<string, number>(), echoesBack: 0, deaths: 0 };
+// 봇의 무사수행: 대개 위험 표시(⚠) 없는 선택지를 고르고, 가끔은 그냥 지나친다.
+const botJourneyHooks = {
+  choose: (_s: GameState, ev: ActiveEvent) => {
+    const opts = ev.options.filter((o) => !o.disabled && o.id !== 'home');
+    const safe = opts.filter((o) => o.id !== 'leave' && !(o.hint || '').includes('⚠'));
+    if (safe.length && Math.random() < 0.85) return safe[Math.floor(Math.random() * safe.length)].id;
+    return (opts.find((o) => o.id === 'leave') || opts[0] || ev.options[0]).id;
+  },
+  fight: (s: GameState) => applyBattleOutcome(s, simulateAutoBattleQuick(s, s.pendingBattle!, 'HERO', s.age >= 45 ? 'COUNTER' : 'BALANCED')),
+  onEvent: (key: string) => jStats.events.set(key, (jStats.events.get(key) || 0) + 1),
+};
+// 두 해에 한 번꼴로, 몸이 성할 때 떠난다
+function wantJourney(st: GameState): boolean {
+  return st.turn >= 6 && st.turn % 8 === 5 && st.health >= 60 && st.statuses.length === 0 && st.money >= 40;
+}
+
+// 폐관수련 · 극의 통계 (전 전략·전 난이도 합산)
+const xStats = { runs: 0, withTranscend: 0, transcendSkills: 0, seclusionDeaths: 0, seclusionSeasons: 0, firstAgeSum: 0, firstAgeN: 0 };
+function recordTranscend(st: GameState, seclusionSeasons: number) {
+  xStats.runs++;
+  jStats.echoesBack += (st.milestones || []).filter((m) => m.key.startsWith('ECHO_')).length;
+  const n = st.skills.filter((s) => s.masteryLevel >= 10).length;
+  xStats.transcendSkills += n;
+  if (n > 0) xStats.withTranscend++;
+  if (st.deathCause?.includes('폐관')) xStats.seclusionDeaths++;
+  xStats.seclusionSeasons += seclusionSeasons;
+  const first = (st.milestones || []).find((m) => m.key === 'TRANSCENDENCE');
+  if (first) { xStats.firstAgeSum += first.age; xStats.firstAgeN++; }
+}
+// 벽에 닿은 초식이 있거나 폐관을 이어 가는 중이면, 몸이 버틸 때 폐관한다.
+function wantSeclusion(st: GameState): boolean {
+  if (st.health < 60 || st.statuses.length > 0) return false;
+  const wall = st.skills.find((s) => isAtMasteryWall(s));
+  const sec = st.seclusion;
+  const ongoing = sec && sec.lastTurn === st.turn - 1 && st.skills.some((s) => s.id === sec.skillId && s.masteryLevel < 10);
+  if (wall) st.seasonPlan.seclusionSkillId = wall.id;
+  return !!wall || !!ongoing;
+}
 
 // Node 환경 localStorage mock
 const memStorage: Record<string, string> = {};
@@ -211,6 +292,8 @@ for (const strat of strategies) {
     st.battleTactic = (strat === 'FOCUS_100' ? 'COUNTER' : strat === 'COMMERCE' ? 'BALANCED' : 'AGGRESSIVE') as BattleTactic;
 
     let craftsDone = 0;
+    let seclusionSeasons = 0;
+    const lifeEvents: string[] = [];
     const maxTurns = 340;
 
     while (st.phase !== 'ENDING' && st.turn < maxTurns) {
@@ -229,15 +312,20 @@ for (const strat of strategies) {
       }
 
       // 주요 이벤트 처리 & 집계
+      let evBefore: GameState | null = null;
+      let evCat = '';
       if (st.activeEvent) {
         const ev = st.activeEvent;
         const baseEvId = ev.id.startsWith('random_dojo_breaker') ? 'random_dojo_breaker' : ev.id.startsWith('random_inspiration') ? 'random_inspiration' : ev.id;
         majorEventCounts.set(baseEvId, (majorEventCounts.get(baseEvId) || 0) + 1);
+        lifeEvents.push(eventBase(ev));
         const valid = ev.options.filter((o) => !o.disabled);
         // 전략별 성향 선택
         let pick = valid[0] || ev.options[0];
         if (strat === 'COMMERCE' && valid.length > 1 && Math.random() < 0.5) pick = valid[1];
         if (isDrama(ev.id)) pick = pickDramaOption(ev, st.age < 30 || st.health < 55);
+        evBefore = st;
+        evCat = evCategory(ev);
         st = resolveEventOption(st, ev, pick.id);
       }
 
@@ -260,6 +348,8 @@ for (const strat of strategies) {
         }
         if (st.phase === 'ENDING') break;
       }
+
+      if (evBefore) book(evCat, evBefore, st);
 
       // 만물객 거래
       if (st.merchantOffer) {
@@ -317,15 +407,39 @@ for (const strat of strategies) {
 
       // 전략별 계절 계획(1~4개, 1/n) 구성!
       const unread = st.books.find((b) => !b.decoded && (!b.requiresMasteryLv || Math.max(...st.skills.map((s) => s.masteryLevel)) >= b.requiresMasteryLv) && (!b.requiresQi || st.stats.qi >= b.requiresQi));
-      const trainSk = [...st.skills].filter((s) => s.masteryLevel < 10).sort((a, b) => b.power - a.power)[0] || st.skills[0];
+      const trainSk = [...st.skills].filter((s) => s.masteryLevel < 10 && !isAtMasteryWall(s)).sort((a, b) => b.power - a.power)[0] || st.skills[0];
       st.seasonPlan.trainSkillId = trainSk.id;
       if (unread) st.seasonPlan.decodeBookId = unread.id;
 
+      if (st.tourney && st.phase !== 'ENDING') {
+        const tb = st;
+        st = runTourneyHeadless(st, (x) => applyBattleOutcome(x, simulateAutoBattleQuick(x, x.pendingBattle!, 'HERO', x.battleTactic)));
+        book('대회', tb, st);
+        tStats.tourneys++;
+        const h = st.flags.tourneyHistory?.[st.flags.tourneyHistory.length - 1];
+        if (h) tStats.results.set(h.heroResult, (tStats.results.get(h.heroResult) || 0) + 1);
+        if (st.phase === 'ENDING') break;
+      }
+      if (wantJourney(st) && !wantSeclusion(st)) {
+        const jb = st;
+        st = runJourneyHeadless(st, regionsForCountry(st.country)[Math.floor(Math.random() * 3)].id, botJourneyHooks);
+        book('무사수행', jb, st);
+        jStats.journeys++;
+        if (st.phase === 'ENDING') { jStats.deaths++; break; }
+        const ab = st;
+        st = advanceSeason({ ...st, lastSeasonSummary: null });
+        book('계절 정산', ab, st);
+        st = withMilestones(turnStart, st) || st;
+        continue;
+      }
       let acts: ScheduleActivityId[] = [];
-      if (st.health < 52 || st.statuses.length > 0) {
+      if (wantSeclusion(st)) {
+        acts = ['SECLUSION', 'SECLUSION', 'SECLUSION'];
+        seclusionSeasons++;
+      } else if (st.health < 52 || st.statuses.length > 0) {
         acts = ['REST'];
       } else if (strat === 'FOCUS_100') {
-        acts = [trainSk.masteryLevel < 10 ? 'TRAIN' : st.age >= 40 ? 'MIND' : 'BODY'];
+        acts = [trainSk.masteryLevel < 10 && !isAtMasteryWall(trainSk) ? 'TRAIN' : st.age >= 40 ? 'MIND' : 'BODY'];
       } else if (strat === 'DUAL_50') {
         acts = ['TRAIN', unread ? 'DECODE' : st.activeCraft ? 'CRAFT' : st.money < 60 ? 'ESCORT' : 'BODY'];
       } else if (strat === 'MULTI_25') {
@@ -338,20 +452,27 @@ for (const strat of strategies) {
 
       const prevSkillCount = st.skills.length;
       const share = 1 / acts.length;
+      const actBefore = st;
       acts.forEach((act, idx) => {
         const ph = idx === 0 ? 'EARLY' : idx === acts.length - 1 ? 'LATE' : 'MID';
         const r = executeScheduleActivity(st, act, share, ph);
         st = r.state;
       });
+      book('계절 활동', actBefore, st);
       if (st.skills.length > prevSkillCount && !st.activeCraft) craftsDone++;
 
+      const advBefore = st;
       st = advanceSeason(st);
+      book('계절 정산', advBefore, st);
       st = withMilestones(turnStart, st) || st; // 앱의 setState가 하는 것과 같은 생전 사건 자동 기록
     }
 
+    recordVariety(lifeEvents, st.turn);
+    ledgerLives++;
     const ending = generatePostMortemEnding(st);
     endingCounts.set(ending.endingTitle, (endingCounts.get(ending.endingTitle) || 0) + 1);
     recordChronicleStats(ending, st);
+    recordTranscend(st, seclusionSeasons);
     st.flags.minorEventIdsSeen.forEach((id) => minorEventSeenGlobal.add(id));
 
     agg.runs++;
@@ -457,6 +578,7 @@ for (const diff of diffs) {
     st.sectName = '무명류';
     st.sectNamed = true;
     let safety = 0;
+    let seclusionSeasons = 0;
     while (st.phase !== 'ENDING' && safety < 320) {
       safety++;
       const turnStart = st;
@@ -610,10 +732,28 @@ for (const diff of diffs) {
       // 생존 중심 정상 플레이어 스케줄 (연구·조합·수련·휴식·호위 균형!)
       const unread = st.books.find((b) => !b.decoded && (!b.requiresMasteryLv || Math.max(...st.skills.map((s) => s.masteryLevel)) >= b.requiresMasteryLv) && (!b.requiresQi || st.stats.qi >= b.requiresQi));
       if (unread) st.seasonPlan.decodeBookId = unread.id;
-      const trainSk = [...st.skills].filter((s) => s.masteryLevel < 10).sort((a, b) => b.power - a.power)[0] || st.skills[0];
+      const trainSk = [...st.skills].filter((s) => s.masteryLevel < 10 && !isAtMasteryWall(s)).sort((a, b) => b.power - a.power)[0] || st.skills[0];
       st.seasonPlan.trainSkillId = trainSk.id;
+      if (st.tourney && st.phase !== 'ENDING') {
+        st = runTourneyHeadless(st, (x) => applyBattleOutcome(x, simulateAutoBattleQuick(x, x.pendingBattle!, 'HERO', x.battleTactic)));
+        tStats.tourneys++;
+        const h = st.flags.tourneyHistory?.[st.flags.tourneyHistory.length - 1];
+        if (h) tStats.results.set(h.heroResult, (tStats.results.get(h.heroResult) || 0) + 1);
+        if (st.phase === 'ENDING') break;
+      }
+      if (wantJourney(st) && !wantSeclusion(st)) {
+        st = runJourneyHeadless(st, regionsForCountry(st.country)[Math.floor(Math.random() * 3)].id, botJourneyHooks);
+        jStats.journeys++;
+        if (st.phase === 'ENDING') { jStats.deaths++; break; }
+        st = advanceSeason({ ...st, lastSeasonSummary: null });
+        st = withMilestones(turnStart, st) || st;
+        continue;
+      }
       let acts: ScheduleActivityId[] = [];
-      if (st.health < 58 || st.statuses.length > 0) {
+      if (wantSeclusion(st)) {
+        acts = ['SECLUSION', 'SECLUSION', 'SECLUSION'];
+        seclusionSeasons++;
+      } else if (st.health < 58 || st.statuses.length > 0) {
         acts = ['REST'];
       } else if (st.activeCraft) {
         acts = ['TRAIN', 'CRAFT'];
@@ -625,7 +765,7 @@ for (const diff of diffs) {
         acts = ['TRAIN', st.age >= 42 ? 'MIND' : 'BODY'];
       }
       // 문하생이 있으면 제자 지도도 계획에 넣는다 (지도를 아예 안 하는 스승은 현실적이지 않다)
-      if (acts[0] !== 'REST' && st.disciples.some((d) => !d.dead) && st.turn % 2 === 0) acts.push('TEACH');
+      if (acts[0] !== 'REST' && acts[0] !== 'SECLUSION' && st.disciples.some((d) => !d.dead) && st.turn % 2 === 0) acts.push('TEACH');
       const share = 1 / acts.length;
       for (let i = 0; i < acts.length; i++) {
         if (st.phase === 'ENDING') break;
@@ -638,6 +778,7 @@ for (const diff of diffs) {
     }
 
     recordChronicleStats(generatePostMortemEnding(st), st);
+    recordTranscend(st, seclusionSeasons);
     sumAge += st.age;
     if (st.age >= 55) survive55++;
     const cause = st.deathCause || '';
@@ -709,6 +850,79 @@ console.log('  • 경로 상위:');
 Array.from(chronicleRoutes.entries()).sort((a, b) => b[1] - a[1]).slice(0, 12).forEach(([k, v]) => console.log(`     - ${k}: ${v}회`));
 console.log(`  • 등장한 개인 삽화 ${vignetteCounts.size} / ${VIGNETTES.length + 2}종 (각성 3형 포함):`);
 Array.from(vignetteCounts.entries()).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log(`     - ${k}: ${v}회`));
+
+console.log(`\n[TEST 6] 폐관수련 · 극의 (${xStats.runs}인생)`);
+console.log(
+  `  • 극의 달성 일생 ${Math.round((xStats.withTranscend / Math.max(1, xStats.runs)) * 100)}% · 일생당 극의 초식 ${(xStats.transcendSkills / Math.max(1, xStats.runs)).toFixed(2)}개 · ` +
+    `첫 극의 평균 ${xStats.firstAgeN ? (xStats.firstAgeSum / xStats.firstAgeN).toFixed(1) : '-'}세 · 일생당 폐관 ${(xStats.seclusionSeasons / Math.max(1, xStats.runs)).toFixed(1)}계절 (극의 1개당 ${(xStats.seclusionSeasons / Math.max(1, xStats.transcendSkills)).toFixed(1)}계절) · 폐관 중 주화입마 사망 ${xStats.seclusionDeaths}건`
+);
+
+// 같은 초식으로 계절을 이어 폐관했을 때 N계절 안에 극의를 이룰 확률 (프로필별 2,000회)
+const SECLUSION_PROFILES = [
+  { label: '약함 (정신40·통찰40·영력30·수련장1)', wil: 40, ins: 40, qi: 30, sanctum: 1 },
+  { label: '보통 (정신60·통찰60·영력50·수련장2)', wil: 60, ins: 60, qi: 50, sanctum: 2 },
+  { label: '강함 (정신100·통찰90·영력80·수련장4)', wil: 100, ins: 90, qi: 80, sanctum: 4 },
+];
+for (const pf of SECLUSION_PROFILES) {
+  const N = 2000;
+  let by1y = 0, by2y = 0, by3y = 0, deaths = 0, deviations = 0, seasonsSum = 0, successes = 0;
+  for (let i = 0; i < N; i++) {
+    let st = createNewGame('KOREA', 'MALE', `폐관_${i}`, 40);
+    st.phase = 'MAIN';
+    st.turn = 40;
+    st.health = 90;
+    st.stats = { ...st.stats, wil: pf.wil, ins: pf.ins, qi: pf.qi };
+    st.facilities = { ...st.facilities, sanctum: pf.sanctum };
+    st.skills = st.skills.map((sk, idx) => (idx === 0 ? { ...sk, masteryLevel: 9, masteryExp: 800 } : sk));
+    st.seasonPlan = { ...st.seasonPlan, activities: ['SECLUSION'], seclusionSkillId: st.skills[0].id };
+    const target = st.skills[0].id;
+    let doneAt = 0;
+    for (let season = 1; season <= 12 && !doneAt && st.phase === 'MAIN'; season++) {
+      (['EARLY', 'MID', 'LATE'] as const).forEach((ph) => {
+        if (st.phase !== 'MAIN') return;
+        const before = st.statuses.some((x) => x.id === 'INTERNAL_INJURY');
+        st = executeScheduleActivity(st, 'SECLUSION', 1 / 3, ph).state;
+        if (!before && st.statuses.some((x) => x.id === 'INTERNAL_INJURY')) deviations++;
+        st.pendingTraitSkillId = null;
+      });
+      if ((st.skills.find((x) => x.id === target)?.masteryLevel || 0) >= 10) doneAt = season;
+      st = { ...st, turn: st.turn + 1, statuses: st.statuses.map((x) => ({ ...x, turnsRemaining: x.turnsRemaining - 1 })).filter((x) => x.turnsRemaining > 0) };
+    }
+    if (st.phase === 'ENDING') deaths++;
+    if (doneAt) { successes++; seasonsSum += doneAt; }
+    if (doneAt && doneAt <= 4) by1y++;
+    if (doneAt && doneAt <= 8) by2y++;
+    if (doneAt && doneAt <= 12) by3y++;
+  }
+  const pc = (x: number) => `${Math.round((x / N) * 100)}%`;
+  console.log(
+    `  • ${pf.label}: 1년 ${pc(by1y)} · 2년 ${pc(by2y)} · 3년 ${pc(by3y)} | 성공까지 평균 ${(seasonsSum / Math.max(1, successes)).toFixed(1)}계절 · 내상 ${(deviations / N).toFixed(2)}회/인 · 사망 ${pc(deaths)}`
+  );
+}
+
+if (xStats.seclusionDeaths / Math.max(1, xStats.runs) > 0.08) warnings.push(`[밸런스 경고] 폐관 중 주화입마 사망이 너무 잦음 (${xStats.seclusionDeaths}/${xStats.runs})`);
+
+const echoKeys = new Set<string>();
+console.log(`\n[TEST 7] 무사수행 (봇 ${jStats.journeys}회)`);
+console.log(`  • 무사수행 중 사망 ${jStats.deaths}건 · 사건 ${jStats.events.size}종 등장 · 되돌아온 메아리 일생당 ${(jStats.echoesBack / Math.max(1, xStats.runs)).toFixed(2)}개`);
+console.log(`  • 자주 나온 사건: ${[...jStats.events.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => `${k} ${v}`).join(' · ')}`);
+void echoKeys;
+console.log(`\n[TEST 10] 명성·돈 출처 (일생 평균, 전략 테스트 ${ledgerLives}인생)`);
+[...ledger.entries()]
+  .sort((a, b) => Math.abs(b[1].fame) + Math.abs(b[1].money) - (Math.abs(a[1].fame) + Math.abs(a[1].money)))
+  .slice(0, 24)
+  .forEach(([k, v]) => console.log(`  • ${k.padEnd(22)} 명성 ${(v.fame / ledgerLives).toFixed(0).padStart(6)} · 돈 ${(v.money / ledgerLives).toFixed(0).padStart(6)}`));
+{
+  const tot = [...ledger.values()].reduce((a, v) => ({ money: a.money + v.money, fame: a.fame + v.fame }), { money: 0, fame: 0 });
+  const evFame = [...ledger.entries()].filter(([k]) => k.startsWith('사건:')).reduce((a, [, v]) => a + v.fame, 0);
+  console.log(`  ─ 합계 명성 ${(tot.fame / ledgerLives).toFixed(0)} (그중 사건 ${(evFame / ledgerLives).toFixed(0)}) · 돈 ${(tot.money / ledgerLives).toFixed(0)}`);
+  console.log(`  ─ 명성 상위: ${[...ledger.entries()].sort((a, b) => b[1].fame - a[1].fame).slice(0, 14).map(([k, v]) => `${k} ${(v.fame / ledgerLives).toFixed(0)}`).join(' · ')}`);
+}
+console.log(`\n[TEST 9] 사건 다양성 (전략 테스트 ${vStats.lives}인생)`);
+console.log(`  • 일생당 사건 ${(vStats.events / Math.max(1, vStats.lives)).toFixed(1)}개 (계절당 ${(vStats.events / Math.max(1, vStats.seasons)).toFixed(2)}) · 서로 다른 사건 ${(vStats.unique / Math.max(1, vStats.lives)).toFixed(1)}종 · 가장 흔한 사건 비중 ${Math.round((vStats.topShare / Math.max(1, vStats.lives)) * 100)}%`);
+console.log(`  • 전체에서 가장 흔한 사건: ${[...vStats.global.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} ${Math.round((v / Math.max(1, vStats.events)) * 100)}%`).join(' · ')}`);
+console.log(`\n[TEST 8] 천하제일 무술대회 (봇 ${tStats.tourneys}회)`);
+console.log(`  • 주인공 성적 분포: ${[...tStats.results.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round((v / Math.max(1, tStats.tourneys)) * 100)}%`).join(' · ')}`);
 
 console.log('\n==================================================================');
 console.log(`  분석 완료 | 치명 오류(FAIL): ${failures.length}건 | 밸런스 경고(WARN): ${warnings.length}건`);
