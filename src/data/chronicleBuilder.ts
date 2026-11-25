@@ -128,7 +128,7 @@ export function buildChronicle(facts: LineageFacts): ChronicleResult {
   if (succession === 'NONE') {
     const t = withGen(deathYear);
     const chronicle: ChronicleEntry[] = [
-      { kind: 'SPINE', yearLabel: `${deathYear + 18}년 (사후 18년)`, headline: EXTINCT[0].headline, body: fill(EXTINCT[0].body, t), badge: '단절' },
+      { kind: 'SPINE', yearLabel: `${deathYear + 18}년 (사후 18년)`, headline: EXTINCT[0].headline, body: fill(EXTINCT[0].body, t), badge: '단절', image: EXTINCT[0].image },
       ...vignettesAt('EARLY', '사후 한 세대 무렵'),
       { kind: 'SPINE', yearLabel: `${deathYear + 72}년 무렵 (격동의 19세기)`, headline: EXTINCT[1].headline, body: fill(EXTINCT[1].body, t), image: EXTINCT[1].image },
       ...vignettesAt('MID', '19세기가 저물 무렵'),
@@ -149,6 +149,7 @@ export function buildChronicle(facts: LineageFacts): ChronicleResult {
     headline: opening.headline,
     body: fill(opening.body, withGen(deathYear)),
     badge: opening.badge,
+    image: opening.image,
     cause: facts.heir
       ? causeFrom(facts, 'HEIR_NAMED', undefined)
       : causeFrom(facts, 'HEIR_LOST', '후계자를 끝내 정하지 않은 채 눈을 감은 일'),

@@ -124,6 +124,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       title: '빗물 새는 마당의 불청객',
       category: 'ONBOARDING',
       sceneActor: 'ENEMY',
+      illustration: '/assets/px_ev_onboard_thug.jpg',
       narration: `한낮의 뙤약볕 아래, 몽둥이를 든 왈패 두목이 도장 대문을 발로 걷어차고 마당으로 성큼성큼 들어선다.`,
       speaker: '동네 왈패 두목',
       dialogue:
@@ -188,6 +189,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       title: '첫 번째 문하생',
       category: 'ONBOARDING',
       sceneActor: 'DISCIPLE',
+      illustration: '/assets/px_ev_onboard_first_disciple.jpg',
       narration: `새벽부터 대문 밖을 기웃거리던 동네 청년 ${josa(dName, '이가')} 낡은 책 한 권을 품에 안고 마당으로 걸어 들어온다.`,
       speaker: dName,
       dialogue: `“사부님! 집안 궤짝에 남아 있던 ${starterBookTitle}을 챙겨 왔습니다! 저를 제자로 받아 주십시오!”`,
@@ -1214,6 +1216,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       id: 'life_genius_orphan',
       title: '빗속에 무릎 꿇은 천재 고아',
       category: 'LIFE',
+      illustration: '/assets/px_chr_v_orphan_gate.jpg',
       narration: '열두 살 남짓한 누더기 차림의 아이가 사흘 밤낮으로 대문 앞에 무릎을 꿇고 있다. 굶주렸으나 눈빛이 칼날처럼 날카롭다.',
       speaker: '고아 소년',
       dialogue: '“밥만 먹여 주시면 평생 마당을 쓸겠습니다. 제발 칼을 가르쳐 주십시오!”',

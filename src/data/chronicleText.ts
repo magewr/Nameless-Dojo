@@ -10,6 +10,7 @@ export interface Fragment {
   headline: string;
   body: string;
   badge?: string;
+  image?: string;
 }
 
 export interface StageFragment {
@@ -26,20 +27,24 @@ const IMG = (name: string) => `/assets/px_chr_${name}.jpg`;
 // ---------------------------------------------------------------------------
 export const SUCCESSION_OPENING: Record<Exclude<SuccessionState, 'NONE'>, Fragment> = {
   INTACT: {
+    image: IMG('succession_intact'),
     headline: '온전히 건너간 칼',
     body: '2대 종주 {HEIR|은는} 스승의 가르침을 한 획도 고치지 않았다. {SKILL}의 궤적은 창시자가 긋던 그대로 다음 세대의 손으로 옮겨 갔고, {WHO|은는} 스승이 떠난 자리를 흔들림 없이 메웠다.',
   },
   FLOURISH: {
+    image: IMG('succession_flourish'),
     headline: '청출어람의 계절',
     badge: '가지를 뻗다',
     body: '2대 종주 {HEIR}의 문하에서는 스승의 초식을 제 것으로 바꾸어 낸 젊은 재목이 잇달아 나왔다. {SKILL|은는} 한 갈래에서 여러 갈래로 뻗었고, {SECT}의 연무장은 창시자 생전보다 시끄러워졌다.',
   },
   DEGRADED: {
+    image: IMG('succession_degraded'),
     headline: '흐려진 획',
     badge: '계승 열화',
     body: '2대 종주 {HEIR|은는} 성실했으나 스승의 극의까지는 닿지 못했다. {SKILL|은는} 모양만 남고 속이 비어 갔다. 오래된 제자들은 그 차이를 알았지만 입 밖에 내지 않았다.',
   },
   SCATTERED: {
+    image: IMG('succession_scattered'),
     headline: '주인 없는 현판',
     badge: '후계 미지명',
     body: '후계자를 정하지 못한 채 스승이 떠나자, 제자들은 저마다 자기가 배운 것이 진짜라 믿으며 흩어졌다. {SKILL|은는} 고을마다 조금씩 다른 모양으로 전해지기 시작했다.',
@@ -500,7 +505,7 @@ export const ALT_HISTORY: Record<CountryId, [FullEntry, FullEntry, FullEntry, Fu
 // ---------------------------------------------------------------------------
 export const EXTINCT: [Fragment & { image: string }, Fragment & { image: string }, Fragment & { image: string }] = [
   {
-    image: '',
+    image: IMG('extinct_beam'),
     headline: '허물어진 도장과 잊힌 현판',
     body: '낡은 기와를 헐어 내던 목수가 대들보 틈에서 기름종이에 싼 얇은 수련 일지를 발견했다. 그 안에는 {SKILL}의 초식도와 {SECT}의 이름이 적혀 있었다.',
   },

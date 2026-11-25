@@ -170,6 +170,7 @@ export const COMMON_EVENTS: JourneyEventDef[] = [
       build: (s) => ({
         title: `대오(大悟)의 자리 — ${title}`,
         category: 'HISTORICAL',
+        illustration: `/assets/px_jr_${key}.jpg`,
         narration: scene,
         script: [N(scene), H(s, thought, '숨을 고르며')],
         options: [

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { GameState } from '../types/game';
 import { COUNTRIES } from '../data/worldAndEndings';
-import { getDojoMapSrc } from '../pixel/spriteLoader';
 import { PixelPortrait } from './PixelPortrait';
 import { sound } from '../engine/sound';
 import { ChevronRight } from 'lucide-react';
@@ -25,7 +24,8 @@ export const PrologueView: React.FC<Props> = ({ state, onStartDojo }) => {
   const isChina = state.country === 'CHINA';
   const parentName = isChina ? '어머니 (선대 도장주)' : '아버지 (선대 도장주)';
 
-  const ruinBg = getDojoMapSrc(state.country, 1);
+  const cc = state.country === 'CHINA' ? 'cn' : state.country === 'JAPAN' ? 'jp' : 'kr';
+  const ruinBg = `/assets/px_prologue_yard_${cc}.jpg`;
   // 한 마디씩 숨 쉬듯 짧게 쪼갠 7장면 영화식 프롤로그!
   const lines: CutsceneLine[] = [
     {

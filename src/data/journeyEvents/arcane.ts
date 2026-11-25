@@ -82,6 +82,7 @@ interface HermitDef {
   title: string;
   place: string;
   age: number;
+  illustration: string;
   scene: string;
   greet: string;
   teach: string; // 가르칠 때 남기는 말
@@ -98,6 +99,7 @@ const HERMITS: HermitDef[] = [
     title: '산신각 뒤에 사는 정체 모를 사내',
     place: '산신각',
     age: 60,
+    illustration: '/assets/px_jr_arcane_kr.jpg',
     scene: '산신각 뒤 너럭바위에 홑옷 차림의 사내가 앉아 있다. 사방이 눈인데, 그가 앉은 자리만 눈이 녹아 김이 오른다.',
     greet: '칼 냄새가 나는구먼. 칼로는 닿지 않는 데가 있다는 걸 알고 왔나, 모르고 왔나?',
     teach: '주문 따위는 없네. 단전의 불을 손끝까지 끌어내는 게야. 숨과 뜻이 전부지.',
@@ -112,6 +114,7 @@ const HERMITS: HermitDef[] = [
     title: '연단로를 지키는 방사',
     place: '연단로 연기',
     age: 55,
+    illustration: '/assets/px_jr_arcane_cn.jpg',
     scene: '골짜기에 연단로(煉丹爐) 연기가 피어오른다. 도포 자락에 그을음이 묻은 방사가 화로에 부채질을 하다 고개를 든다.',
     greet: '무림의 칼잡이가 이 산중까지? 하하, 단약을 사러 온 얼굴은 아니로군.',
     teach: '천지의 기는 칼을 기다려 주지 않네. 벼락은 뜻이 먼저 닿은 자리에 떨어지지.',
@@ -126,6 +129,7 @@ const HERMITS: HermitDef[] = [
     title: '식신을 부리는 음양사',
     place: '종이 학이 날아든 사당',
     age: 48,
+    illustration: '/assets/px_jr_arcane_jp.jpg',
     scene: '종이 학 한 마리가 길을 앞서 날아간다. 따라가 보니 작은 사당 앞에서 흰 가리기누 차림의 음양사가 부적을 접고 있다.',
     greet: '제 식신(式神)을 따라올 수 있는 분은 드뭅니다. 무사님, 칼 밖의 세상이 궁금하십니까?',
     teach: '공간도 종이처럼 접힙니다. 접는 법을 아는 사람에게만요.',
@@ -150,6 +154,7 @@ const HERMIT_EVENTS: JourneyEventDef[] = HERMITS.map(
         title: `이계의 은자 — ${h.name}`,
         category: 'FANTASY',
         sceneActor: 'RIVAL',
+        illustration: h.illustration,
         speaker: h.name,
         narration: h.scene,
         script: [N(h.scene), P(h.name, h.greet), H(s, '칼 밖의 이치가 있다면, 한 자락이라도 배우고 싶습니다.', '포권하며')],
@@ -254,6 +259,7 @@ const meteor: JourneyEventDef = {
   build: () => ({
     title: '별똥별이 떨어진 자리',
     category: 'FANTASY',
+    illustration: '/assets/px_jr_meteor.jpg',
     narration: '나무가 부채꼴로 쓰러진 숲 한가운데, 땅이 움푹 꺼져 있다. 구덩이 바닥의 검은 돌이 아직 따뜻하다.',
     script: [
       N('지난밤 하늘을 가르던 빛이 여기 떨어졌다. 나무들이 부채꼴로 쓰러져 있고, 구덩이 바닥에서 검은 돌이 희미하게 김을 낸다.'),

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { GameState, LegacyRecord } from '../types/game';
 import { ChronicleCause, COUNTRIES, generatePostMortemEnding, SEASON_META } from '../data/worldAndEndings';
 import { BOOK_SKILL_TEMPLATES, MASTERY_NAMES } from '../data/booksAndSkills';
-import { getDojoMapSrc } from '../pixel/spriteLoader';
+import { getBattleStageSrc, getDojoMapSrc } from '../pixel/spriteLoader';
 import { appendLegacyRecord, clearGameState, hasUnlockedHellDifficulty, markGameCleared } from '../engine/storage';
 import { getDifficultyConfig } from '../data/difficulty';
 import { PixelPortrait } from './PixelPortrait';
@@ -67,15 +67,22 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
       ? '“……결국 끝을 보았구나. 후회하지는 않는다. 이 경지 너머는…… 다음 세대에 맡기마.”'
       : '“횡베기 하나, 종베기 하나에서 시작했는데…… 참 멀리도 왔구나. 이제 내 뒤는…… 너희가 지켜 다오.”';
 
+    const isExtinct = report.chronicle[0]?.badge === '단절';
+    const deathBg = isDuelDeath
+      ? getBattleStageSrc(state.country, { isRealDuel: true })
+      : isForbiddenDeath
+      ? '/assets/px_end_forbidden.jpg'
+      : '/assets/px_end_death.jpg';
+
     const list: EndingScene[] = [
       {
-        bg: isDuelDeath ? '/assets/px_battle_duel_stage.jpg' : '/assets/px_end_death.jpg',
+        bg: deathBg,
         eraBadge: `${state.year}년 · 향년 ${state.age}세`,
         title: isDuelDeath ? '최후의 진검' : isForbiddenDeath ? '불타오른 경맥' : '겨울밤의 영면',
         text: deathLine1,
       },
       {
-        bg: isDuelDeath ? '/assets/px_battle_duel_stage.jpg' : '/assets/px_end_death.jpg',
+        bg: deathBg,
         eraBadge: `${state.name}의 마지막 말`,
         title: '남겨진 유언',
         speaker: `${state.name} (${state.age}세)`,
@@ -84,7 +91,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
         subNote: '가느다란 숨이 멎었다. 한 시대를 살다 간 무인의 일생이 조용히 막을 내렸다. — 그러나 이야기는 아직 끝나지 않았다.',
       },
       {
-        bg: getDojoMapSrc(state.country, state.facilities.yard),
+        bg: isExtinct ? getDojoMapSrc(state.country, 1) : '/assets/px_end_funeral.jpg',
         eraBadge: `${state.year}년 · 장례와 계승`,
         title: `【${state.sectName}】 그 이후`,
         text: `${report.funeralParagraph}\n\n${report.heirSummary}`,
