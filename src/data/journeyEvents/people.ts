@@ -351,7 +351,7 @@ export const PEOPLE_EVENTS: JourneyEventDef[] = [
       const options = friendly
         ? [
             ...(v.id === 'escort'
-              ? [{ id: 'escort', label: '호의를 받아 함께 고개를 넘는다', hint: `이 구간의 매복을 피한다 · ${josa(name, '과와')}의 관계 +3` }]
+              ? [{ id: 'escort', label: '호의를 받아 함께 고개를 넘는다', hint: `이 일대의 매복을 피한다 · ${josa(name, '과와')}의 관계 +3` }]
               : [{ id: 'drink', label: '차를 나누며 근황을 듣는다', hint: `통찰 +1 · ${josa(name, '과와')}의 관계 +6` }]),
             { id: 'spar', label: '청을 받아 가볍게 한 수 겨뤄 준다', hint: '목검 시합 · 이기면 명성' },
             { id: 'leave', label: '고맙다며 갈 길을 간다' },
@@ -395,7 +395,7 @@ export const PEOPLE_EVENTS: JourneyEventDef[] = [
       }
       if (opt === 'escort') {
         const n = adjustRelation(clearAmbushes(s), sect.id, 3, `${sect.name} 제자들의 안내로 고개를 넘었다`);
-        return say(n, [['나레이션', `제자들이 앞뒤로 서자 고갯길이 조용했다. 이 구간에서는 매복을 만나지 않을 것이다. (${josa(sect.name, '과와')}의 관계 +3)`]]);
+        return say(n, [['나레이션', `제자들이 앞뒤로 서자 고갯길이 조용했다. 이 일대에서는 매복을 만나지 않을 것이다. (${josa(sect.name, '과와')}의 관계 +3)`]]);
       }
       const n = adjustRelation(addRep(s, { virtue: 3 }), sect.id, 6, `길에서 ${sect.name} 제자들에게 먼저 예를 갖추었다`);
       return say(n, [['나레이션', `웃으며 포권하자 대제자가 머쓱하게 길을 비켰다. (${josa(sect.name, '과와')}의 관계 +6)`]]);

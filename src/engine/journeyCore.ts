@@ -16,6 +16,7 @@ import { createBattleConfig } from '../data/events';
 import { COUNTRIES } from '../data/worldAndEndings';
 import { getDifficultyConfig } from '../data/difficulty';
 import { JourneyLeg, JourneyRegion, JourneyTerrain } from '../data/journeyRegions';
+import { getJourneyMap, pickPoiTile } from '../data/journeyMap';
 import { addLog } from './log';
 import { gainSkillExp, getBreakthroughChance, getMaxHealthByAge, isSeclusionContinuing } from './gameLogic';
 
@@ -353,18 +354,23 @@ export function journeyBattle(
 }
 
 // ───────── 길 위의 상태를 바꾸는 도구 ─────────
-// 이 구간 앞쪽에 새 장소를 놓는다 (소문, 안내 등)
+// 지금 서 있는 땅에, 주인공에게서 몇 걸음 떨어진 곳에 새 장소를 놓는다 (소문, 안내 등)
 export function addPoiAhead(s: GameState, kind: JourneyPoiKind, eventKey: string, label: string): GameState {
   const j = s.journey;
   if (!j) return s;
-  const x = Math.min(j.legLength - 120, j.heroX + 260 + Math.random() * 380);
-  if (x <= j.heroX + 60) return s;
-  return { ...s, journey: { ...j, pois: [...j.pois, { id: `poi_add_${s.turn}_${Math.random().toString(36).slice(2, 6)}`, kind, eventKey, x, label }].sort((a, b) => a.x - b.x) } };
+  const m = getJourneyMap(j.regionId);
+  const occupied = [...j.pois, { tx: j.pos.x, ty: j.pos.y }];
+  const spot = pickPoiTile(m, j.legId, kind, occupied, { x: j.pos.x, y: j.pos.y, min: 3, max: 9 });
+  if (!spot) return s;
+  const poi = { id: `poi_add_${s.turn}_${Math.random().toString(36).slice(2, 6)}`, kind, eventKey, tx: spot.x, ty: spot.y, legId: j.legId, label };
+  return { ...s, journey: { ...j, pois: [...j.pois, poi] } };
 }
 
-// 이 구간의 남은 돌발 사건(매복)을 없앤다
+// 지금 서 있는 땅에서는 더 이상 돌발 사건(매복·맹수)이 일어나지 않는다
 export function clearAmbushes(s: GameState): GameState {
-  return s.journey ? { ...s, journey: { ...s.journey, ambushAt: [] } } : s;
+  const j = s.journey;
+  if (!j) return s;
+  return { ...s, journey: { ...j, safeLegs: Array.from(new Set([...(j.safeLegs || []), j.legId])) } };
 }
 
 // ───────── 변주 고르기 — 같은 사건이라도 최근에 본 장면은 피한다 ─────────

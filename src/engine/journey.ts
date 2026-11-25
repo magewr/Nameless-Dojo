@@ -9,16 +9,8 @@ import {
   SeasonSummaryData,
 } from '../types/game';
 import { ALL_JOURNEY_EVENTS, getJourneyEventDef } from '../data/journeyEvents';
-import {
-  DAY_PX,
-  getLeg,
-  getRegion,
-  JOURNEY_DAYS_PER_SEASON,
-  JourneyLeg,
-  JourneyRegion,
-  regionsForCountry,
-  rumorsFor,
-} from '../data/journeyRegions';
+import { getLeg, getRegion, JOURNEY_DAYS_PER_SEASON, JourneyLeg, JourneyRegion, regionsForCountry, rumorsFor } from '../data/journeyRegions';
+import { findPath, getJourneyMap, pickPoiTile, tileAt, tileDays, TILE_INFO, zoneLegAt, zoneOf } from '../data/journeyMap';
 import { addFame, addHealth, highlight, JCtx, JourneyEventDef, isDone, markDone, triggerMet } from './journeyCore';
 import { noteSeen } from './fresh';
 import { getDifficultyId } from '../data/difficulty';
@@ -29,18 +21,8 @@ import { addLog } from './log';
 // ───────────────────────── 무사수행 진행 엔진 ─────────────────────────
 // 필드 화면(JourneyView)과 플레이테스트 봇이 함께 쓰는 순수 함수들.
 
-const LEG_MARGIN = 80;
-
-// 구간 표의 날수는 길만 걸었을 때 기준이다. 쉬고, 헤매고, 길을 묻는 날까지 쳐서 1.3배로 잡는다.
-const LEG_DAYS_MULT = 1.3;
-
-export function legDays(leg: JourneyLeg): number {
-  return Math.round(leg.days * LEG_DAYS_MULT);
-}
-
-function legPx(leg: JourneyLeg): number {
-  return legDays(leg) * DAY_PX;
-}
+// 지도 위를 한 칸씩 걷는다. 칸마다 땅의 생김새에 따라 날수가 든다(길 0.6일, 들 0.85일, 숲 1.2일, 산비탈 1.5일 — journeyMap.ts).
+// 땅(구역)에 처음 발을 들이면 그 땅의 장소들이 놓이고, 장소가 놓인 칸을 밟으면 사건이 열린다.
 
 function eligible(def: JourneyEventDef, s: GameState, r: JourneyRegion, usedKeys: Set<string>, leg: JourneyLeg | null = null, day = 0): boolean {
   if (!triggerMet(def.trigger, s, leg, day)) return false;
@@ -77,10 +59,9 @@ function roadFresh(s: GameState, def: JourneyEventDef): number {
   return byAgo / (1 + 0.15 * count);
 }
 
-// 이 구간에 놓일 장소들. 시대 사건은 가중치를 크게 주어 그 해의 공기가 길 위에 드러나게 한다.
-function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Pick<JourneyState, 'pois' | 'usedKeys'> | JourneyState | null): JourneyPoi[] {
+// 이 땅에 놓일 장소들. 시대 사건은 가중치를 크게 주어 그 해의 공기가 길 위에 드러나게 한다.
+function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: JourneyState | null): JourneyPoi[] {
   const used = new Set<string>([...(journey?.pois || []).map((p) => p.eventKey), ...(journey?.usedKeys || [])]);
-  const length = legPx(leg);
   const out: Array<{ kind: JourneyPoiKind; key: string }> = [];
 
   // 대오의 장소는 그 구간에 반드시 놓인다.
@@ -119,29 +100,26 @@ function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Pic
     used.add(pick.key);
   }
 
-  // 길을 따라 고르게 흩뿌린다.
-  const span = length - LEG_MARGIN * 2 - 260;
-  return out.map((o, i) => {
+  // 땅 안에 흩뿌린다 — 주막·사람은 길가에, 고수·보물·절경은 길에서 들어간 곳에.
+  const m = getJourneyMap(r.id);
+  const occupied: Array<{ tx: number; ty: number }> = [...(journey?.pois || [])];
+  if (journey) occupied.push({ tx: journey.pos.x, ty: journey.pos.y });
+  const placed: JourneyPoi[] = [];
+  out.forEach((o, i) => {
+    const spot = pickPoiTile(m, leg.id, o.kind, [...occupied, ...placed]);
+    if (!spot) return;
     const def = getJourneyEventDef(o.key);
-    const base = LEG_MARGIN + 260 + (span * (i + 0.5)) / out.length;
-    const x = Math.round(Math.max(LEG_MARGIN + 200, Math.min(length - LEG_MARGIN - 60, base + (Math.random() - 0.5) * (span / out.length) * 0.6)));
-    return {
+    placed.push({
       id: `poi_${s.turn}_${leg.id}_${i}_${Math.random().toString(36).slice(2, 5)}`,
       kind: o.kind,
       eventKey: o.key,
-      x,
+      tx: spot.x,
+      ty: spot.y,
+      legId: leg.id,
       label: def?.label ? def.label(s, r) : o.key,
-    };
-  }).sort((a, b) => a.x - b.x);
-}
-
-function buildAmbushes(s: GameState, r: JourneyRegion, leg: JourneyLeg): number[] {
-  const length = legPx(leg);
-  const expected = r.danger * (leg.days / 16) * (s.season === 'WINTER' ? 1.2 : 1) * (leg.terrain === 'TOWN' || leg.terrain === 'TEMPLE' ? 0.4 : 1);
-  const n = Math.floor(expected + Math.random() * 0.9);
-  const xs: number[] = [];
-  for (let i = 0; i < Math.min(2, n); i++) xs.push(Math.round(400 + Math.random() * (length - 700)));
-  return xs.sort((a, b) => a - b);
+    });
+  });
+  return placed;
 }
 
 // ───────── 출발 ─────────
@@ -154,21 +132,21 @@ export function defaultRegionFor(s: GameState): JourneyRegionId {
 
 export function startJourney(s: GameState, regionId?: JourneyRegionId): GameState {
   const r = getRegion(regionId || defaultRegionFor(s));
+  const m = getJourneyMap(r.id);
   const leg = getLeg(r, r.startLeg);
   const base: JourneyState = {
     regionId: r.id,
     day: 0,
     maxDays: JOURNEY_DAYS_PER_SEASON,
     legId: leg.id,
-    legCount: 1,
-    legLength: legPx(leg),
-    heroX: LEG_MARGIN,
+    pos: { ...m.entrance },
+    facing: 'R',
+    steps: 0,
     pois: [],
-    ambushAt: [],
+    builtLegs: [leg.id],
     visitedLegs: [leg.id],
     highlights: [],
     start: { money: s.money, fame: s.fame, health: s.health, stats: { ...s.stats }, year: s.year, season: s.season },
-    atFork: false,
     lastRumor: rumorsFor(s.country, s.year)[0],
   };
   let next: GameState = {
@@ -176,34 +154,39 @@ export function startJourney(s: GameState, regionId?: JourneyRegionId): GameStat
     lastSeasonSummary: null,
     flags: { ...s.flags, journeyCount: (s.flags.journeyCount || 0) + 1 },
   };
-  base.pois = buildPois(next, r, leg, null);
-  base.ambushAt = buildAmbushes(next, r, leg);
+  base.pois = buildPois(next, r, leg, base);
   next = { ...next, journey: base };
   return addLog(next, `무사수행을 떠났다 — ${r.name}(${r.hanja}). ${r.blurb}`, 'GOOD');
 }
 
-// ───────── 걷기 ─────────
-
-// 화면이 주인공 위치를 넘겨줄 때마다 부른다. 걸은 거리만큼 날이 흐르고, 매복 지점을 넘으면 돌발 사건이 터진다.
-export function syncWalk(s: GameState, heroX: number, walkedPx: number): GameState {
-  const j = s.journey;
-  if (!j) return s;
-  const x = Math.max(LEG_MARGIN * 0.5, Math.min(j.legLength, heroX));
-  let next: GameState = {
-    ...s,
-    journey: { ...j, heroX: x, day: Math.min(j.maxDays, j.day + walkedPx / DAY_PX), atFork: x >= j.legLength - 4 },
+// 예전(좌우로 걷던 필드) 세이브의 무사수행을 지도 위로 옮긴다. 지금 구간의 장소만 새로 놓는다.
+export function normalizeJourney(s: GameState): GameState {
+  const j = s.journey as (JourneyState & { heroX?: number }) | null | undefined;
+  if (!j || (j.pos && Array.isArray(j.builtLegs) && j.pois.every((p) => typeof p.tx === 'number'))) return s;
+  const r = getRegion(j.regionId);
+  const m = getJourneyMap(r.id);
+  const zone = zoneOf(m, j.legId) || zoneOf(m, r.startLeg)!;
+  const fixed: JourneyState = {
+    regionId: j.regionId,
+    day: j.day,
+    maxDays: j.maxDays,
+    legId: zone.legId,
+    pos: { x: zone.cx, y: zone.cy },
+    facing: 'R',
+    steps: 0,
+    pois: [],
+    builtLegs: [zone.legId],
+    visitedLegs: Array.from(new Set([...(j.visitedLegs || []), zone.legId])),
+    highlights: j.highlights || [],
+    start: j.start,
+    usedKeys: Array.from(new Set([...(j.usedKeys || []), ...(j.pois || []).map((p) => p.eventKey)])),
+    lastRumor: j.lastRumor,
   };
-  if (j.ambushAt.length > 0 && x >= j.ambushAt[0] && !s.activeEvent) {
-    next = { ...next, journey: { ...next.journey!, ambushAt: j.ambushAt.slice(1) } };
-    next = openAmbush(next);
-  }
-  // 길을 걷다 보면 새 풍문이 들린다
-  if (Math.random() < walkedPx / (DAY_PX * 6)) {
-    const rumors = rumorsFor(s.country, s.year);
-    if (rumors.length) next = { ...next, journey: { ...next.journey!, lastRumor: rumors[Math.floor(Math.random() * rumors.length)] } };
-  }
-  return next;
+  fixed.pois = buildPois(s, r, getLeg(r, zone.legId), fixed);
+  return { ...s, journey: fixed };
 }
+
+// ───────── 걷기 ─────────
 
 export function currentRegion(s: GameState): JourneyRegion | null {
   return s.journey ? getRegion(s.journey.regionId) : null;
@@ -214,34 +197,88 @@ export function currentLeg(s: GameState): JourneyLeg | null {
   return r && s.journey ? getLeg(r, s.journey.legId) : null;
 }
 
-export function nextLegs(s: GameState): JourneyLeg[] {
-  const r = currentRegion(s);
-  const leg = currentLeg(s);
-  if (!r || !leg) return [];
-  return leg.next.map((id) => getLeg(r, id));
+// 돌발 사건(매복·맹수·폭설·검문)이 하루에 일어날 확률. 지역의 위험도, 땅의 성격, 계절에 따른다.
+function ambushRatePerDay(s: GameState, r: JourneyRegion, leg: JourneyLeg): number {
+  const base = Math.max(0, r.danger - 0.15) * 0.06;
+  const terrain = leg.terrain === 'TOWN' || leg.terrain === 'TEMPLE' ? 0.4 : 1;
+  return base * terrain * (s.season === 'WINTER' ? 1.2 : 1);
 }
 
-export function enterLeg(s: GameState, legId: string): GameState {
+// 처음 발을 들인 땅 — 그 땅의 장소들을 놓는다
+function enterZone(s: GameState, legId: string): GameState {
   const r = currentRegion(s);
   const j = s.journey;
-  if (!r || !j) return s;
+  if (!r || !j || j.legId === legId) return s;
   const leg = getLeg(r, legId);
-  const pois = buildPois(s, r, leg, j);
-  return {
-    ...s,
-    journey: {
-      ...j,
-      usedKeys: Array.from(new Set([...(j.usedKeys || []), ...j.pois.map((p) => p.eventKey)])),
-      legId: leg.id,
-      legCount: j.legCount + 1,
-      legLength: legPx(leg),
-      heroX: LEG_MARGIN,
-      pois,
-      ambushAt: buildAmbushes(s, r, leg),
-      visitedLegs: [...j.visitedLegs, leg.id],
-      atFork: false,
-    },
+  let journey: JourneyState = {
+    ...j,
+    legId,
+    visitedLegs: j.visitedLegs.includes(legId) ? j.visitedLegs : [...j.visitedLegs, legId],
   };
+  if (!j.builtLegs.includes(legId)) {
+    const pois = buildPois(s, r, leg, journey);
+    journey = { ...journey, builtLegs: [...journey.builtLegs, legId], pois: [...journey.pois, ...pois] };
+  }
+  return { ...s, journey };
+}
+
+const FACING: Record<string, JourneyState['facing']> = { '1,0': 'R', '-1,0': 'L', '0,1': 'D', '0,-1': 'U' };
+
+// 한 칸 걷는다. 길이 막혔으면 방향만 바꾼다. 장소를 밟으면 사건이 열리고, 걷는 동안 돌발 사건이 끼어든다.
+export function stepJourney(s: GameState, dx: number, dy: number): GameState {
+  const j = s.journey;
+  if (!j || s.activeEvent || s.pendingBattle || s.phase !== 'MAIN') return s;
+  if (j.day >= j.maxDays - 0.01) return s;
+  if (Math.abs(dx) + Math.abs(dy) !== 1) return s;
+  const r = currentRegion(s)!;
+  const m = getJourneyMap(j.regionId);
+  const nx = j.pos.x + dx;
+  const ny = j.pos.y + dy;
+  const facing = FACING[`${dx},${dy}`] || j.facing;
+  const t = tileAt(m, nx, ny);
+  if (!t || !TILE_INFO[t].pass) return facing === j.facing ? s : { ...s, journey: { ...j, facing } };
+  const cost = tileDays(t, s.season);
+  let next: GameState = {
+    ...s,
+    journey: { ...j, pos: { x: nx, y: ny }, facing, day: Math.min(j.maxDays, j.day + cost), steps: (j.steps || 0) + 1 },
+  };
+  const zone = zoneLegAt(m, nx, ny);
+  if (zone && zone !== j.legId) next = enterZone(next, zone);
+  const js = next.journey!;
+
+  // 길을 걷다 보면 새 풍문이 들린다
+  if (Math.random() < cost / 6) {
+    const rumors = rumorsFor(s.country, s.year);
+    if (rumors.length) next = { ...next, journey: { ...js, lastRumor: rumors[Math.floor(Math.random() * rumors.length)] } };
+  }
+
+  // 장소를 밟았다
+  const poi = js.pois.find((p) => p.tx === nx && p.ty === ny && !p.done);
+  if (poi) return openPoi(next, poi.id);
+
+  // 돌발 사건 — 바로 앞선 돌발에서 나흘은 지나야 또 일어난다
+  const leg = getLeg(r, js.legId);
+  const sinceLast = js.day - (js.lastAmbushDay ?? -99);
+  if (js.day >= 3 && sinceLast >= 4 && !(js.safeLegs || []).includes(js.legId) && Math.random() < ambushRatePerDay(s, r, leg) * cost) {
+    next = { ...next, journey: { ...next.journey!, lastAmbushDay: js.day } };
+    next = openAmbush(next);
+  }
+  return next;
+}
+
+// 지금 선 칸의 장소 (다시 살펴보기용)
+export function poiHere(s: GameState): JourneyPoi | null {
+  const j = s.journey;
+  if (!j) return null;
+  return j.pois.find((p) => p.tx === j.pos.x && p.ty === j.pos.y && !p.done) || null;
+}
+
+// 도장으로 이어지는 길목에 서 있는가
+export function atEntrance(s: GameState): boolean {
+  const j = s.journey;
+  if (!j) return false;
+  const m = getJourneyMap(j.regionId);
+  return j.pos.x === m.entrance.x && j.pos.y === m.entrance.y;
 }
 
 // ───────── 사건 열기 ─────────
@@ -491,7 +528,7 @@ export function applyJourneyDefeat(state: GameState, battle: BattleConfig, outco
 export function journeyOver(s: GameState): boolean {
   const j = s.journey;
   if (!j) return false;
-  return j.day >= j.maxDays - 0.01 || (!!j.atFork && nextLegs(s).length === 0);
+  return j.day >= j.maxDays - 0.01;
 }
 
 export function finishJourney(s: GameState): GameState {
@@ -519,10 +556,10 @@ export function finishJourney(s: GameState): GameState {
     statDeltas,
     majorEvents: [],
     discipleNote: alive.length > 0 ? `스승이 길을 떠난 사이 문하생 ${alive.length}명이 저희끼리 도장을 지켰습니다. (충성 -1~2)` : undefined,
-    highlights: [`${r.name}(${r.hanja}) 무사수행 — ${j.visitedLegs.length}개 구간, ${Math.round(j.day)}일`, ...(j.highlights.length ? j.highlights : ['큰일 없이 길을 걷고 돌아왔다.'])],
+    highlights: [`${r.name}(${r.hanja}) 무사수행 — ${j.visitedLegs.length}곳을 지나 ${Math.round(j.day)}일`, ...(j.highlights.length ? j.highlights : ['큰일 없이 길을 걷고 돌아왔다.'])],
   };
   const next: GameState = { ...s, disciples, journey: null, lastSeasonSummary: summary, activeEvent: null };
-  return addLog(next, `${r.name} 무사수행을 마치고 도장으로 돌아왔다. (${j.visitedLegs.length}개 구간, ${Math.round(j.day)}일)`, 'GOOD');
+  return addLog(next, `${r.name} 무사수행을 마치고 도장으로 돌아왔다. (${j.visitedLegs.length}곳, ${Math.round(j.day)}일)`, 'GOOD');
 }
 
 // ───────── 도장으로 돌아오는 메아리 ─────────
@@ -544,46 +581,48 @@ export function pickDueHomeEcho(s: GameState): ActiveEvent | null {
 export interface HeadlessJourneyHooks {
   choose: (s: GameState, ev: ActiveEvent) => string;
   fight: (s: GameState) => GameState; // pendingBattle을 치르고 결과를 반영해 돌려준다
-  onEvent?: (key: string) => void;
+  onEvent?: (key: string, s: GameState) => void;
+  onStep?: (s: GameState) => void;
 }
 
+// 봇은 가장 가까운 아직 안 들른 장소로 걷고, 들를 곳이 없으면 아직 안 밟은 땅으로 간다.
 export function runJourneyHeadless(s0: GameState, regionId: JourneyRegionId | undefined, hooks: HeadlessJourneyHooks): GameState {
   let s = startJourney(s0, regionId);
-  let guard = 0;
+  const m = getJourneyMap(s.journey!.regionId);
+  const tried = new Set<string>(); // 한 번 살펴본 장소 (그냥 지나쳤어도 다시 가지 않는다)
   const handleEvent = () => {
     let inner = 0;
     while (s.activeEvent && inner++ < 4) {
       const ev = s.activeEvent;
       const opt = hooks.choose(s, ev);
-      hooks.onEvent?.(String(ev.meta?.jrKey || ev.id));
+      hooks.onEvent?.(String(ev.meta?.jrKey || ev.id), s);
+      if (ev.meta?.poiId) tried.add(String(ev.meta.poiId));
       s = resolveJourneyEvent({ ...s, activeEvent: null }, ev, opt);
       s = { ...s, pendingNotice: null };
       if (s.pendingBattle && s.phase === 'BATTLE') s = hooks.fight(s);
       if (s.pendingTraitSkillId) s = { ...s, pendingTraitSkillId: null };
     }
   };
-  while (s.journey && s.phase === 'MAIN' && guard++ < 40) {
+  let guard = 0;
+  while (s.journey && s.phase === 'MAIN' && !journeyOver(s) && guard++ < 60) {
     const j = s.journey;
-    // 구간을 끝까지 걸으며 장소마다 들른다
-    const stops = [...j.pois.map((p) => ({ x: p.x, poi: p.id as string | null })), { x: j.legLength, poi: null }].sort((a, b) => a.x - b.x);
-    for (const stop of stops) {
-      if (!s.journey || s.phase !== 'MAIN') break;
-      const walked = Math.max(0, stop.x - s.journey.heroX);
-      s = syncWalk(s, stop.x, walked);
-      handleEvent();
-      if (!s.journey || journeyOver(s)) break;
-      if (stop.poi) {
-        s = openPoi(s, stop.poi);
+    const open = j.pois.filter((p) => !p.done && !tried.has(p.id));
+    let path = open.length ? findPath(m, j.pos, (x, y) => open.some((p) => p.tx === x && p.ty === y)) : null;
+    if (!path) path = findPath(m, j.pos, (x, y) => !j.visitedLegs.includes(zoneLegAt(m, x, y) || ''));
+    if (!path) break;
+    for (const step of path) {
+      if (!s.journey || s.phase !== 'MAIN' || journeyOver(s)) break;
+      const cur = s.journey.pos;
+      s = stepJourney(s, step.x - cur.x, step.y - cur.y);
+      hooks.onStep?.(s);
+      if (s.activeEvent) {
         handleEvent();
+        // 사건이 끝나면 목표를 다시 고른다
+        break;
       }
-      if (!s.journey || journeyOver(s)) break;
     }
-    if (!s.journey || s.phase !== 'MAIN') break;
-    if (journeyOver(s)) break;
-    const options = nextLegs(s);
-    if (options.length === 0) break;
-    s = enterLeg(s, options[Math.floor(Math.random() * options.length)].id);
   }
+  if (s.journey) hooks.onStep?.(s);
   if (s.journey && s.phase === 'MAIN') s = finishJourney(s);
   return s;
 }

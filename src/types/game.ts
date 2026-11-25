@@ -60,7 +60,9 @@ export interface JourneyPoi {
   id: string;
   kind: JourneyPoiKind;
   eventKey: string;
-  x: number; // 구간 안에서의 위치(px)
+  tx: number; // 지도 위의 칸
+  ty: number;
+  legId: string; // 놓인 땅(구역)
   label: string;
   done?: boolean;
   data?: Record<string, string | number>;
@@ -70,16 +72,17 @@ export interface JourneyState {
   regionId: JourneyRegionId;
   day: number; // 쓴 날수
   maxDays: number; // 한 계절 = 90일
-  legId: string;
-  legCount: number; // 지나온 구간 수
-  legLength: number; // 이번 구간 길이(px)
-  heroX: number;
+  legId: string; // 지금 서 있는 땅(구역) — 지역 구간표의 구간 하나가 지도 위의 땅 하나다
+  pos: { x: number; y: number }; // 지도 위의 칸
+  facing?: 'L' | 'R' | 'U' | 'D';
+  steps?: number; // 걸은 걸음 수
   pois: JourneyPoi[];
-  ambushAt: number[]; // 아직 터지지 않은 돌발 사건 위치
-  visitedLegs: string[];
+  builtLegs: string[]; // 장소가 이미 놓인 땅 (처음 발을 들일 때 놓는다)
+  visitedLegs: string[]; // 발을 들인 땅
+  safeLegs?: string[]; // 돌발 사건이 사라진 땅
+  lastAmbushDay?: number;
   highlights: string[];
   start: { money: number; fame: number; health: number; stats: Stats; year: number; season: Season };
-  atFork?: boolean; // 구간 끝 갈림길에 서 있다
   usedKeys?: string[]; // 이번 수행에서 이미 놓였던 사건 (같은 수행 안에서 되풀이하지 않는다)
   lastRumor?: string;
 }

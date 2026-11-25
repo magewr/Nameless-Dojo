@@ -174,12 +174,12 @@ export const CONDITIONAL_EVENTS: JourneyEventDef[] = [
       script: [N(v.scene), P(v.who, v.line, '목소리를 낮추며')],
       meta: { vkey: v.id },
       options: [
-        { id: 'stay', label: '하룻밤 신세를 진다 (1일)', hint: '이 구간의 매복을 피한다 · 건강' },
+        { id: 'stay', label: '하룻밤 신세를 진다 (1일)', hint: '이 일대의 매복을 피한다 · 건강' },
         { id: 'thank', label: '고맙다며 그냥 간다' },
       ],
       };
     },
-    resolve: (s, opt) => (opt === 'stay' ? say(clearAmbushes(addHealth(spendDays(s, 1), 10)), [['나레이션', '따뜻한 저녁을 얻어먹고 샛길을 안내받았다. 이 구간에서는 매복을 만나지 않을 것이다. (건강 +10)']]) : s),
+    resolve: (s, opt) => (opt === 'stay' ? say(clearAmbushes(addHealth(spendDays(s, 1), 10)), [['나레이션', '따뜻한 저녁을 얻어먹고 샛길을 안내받았다. 이 일대에서는 매복을 만나지 않을 것이다. (건강 +10)']]) : s),
   },
   // ───────── 주머니가 비면 ─────────
   {
@@ -383,7 +383,7 @@ export const CONDITIONAL_EVENTS: JourneyEventDef[] = [
       script: [P('거지 아이', '예전에 우리 형님한테 주먹밥 주신 나리죠? 거지들 사이엔 소문이 다 나요. 저 산 너머에 아무도 모르는 동굴이 있어요.', '씩 웃으며')],
       options: [{ id: 'follow', label: '아이를 따라간다', hint: '숨은 장소가 생긴다' }],
     }),
-    resolve: (s) => say(addPoiAhead(s, 'TREASURE', rand(['tr_carving', 'tr_ruin', 'tr_swordgrave']), '거지가 알려 준 곳'), [['나레이션', '길 앞쪽에 「거지가 알려 준 곳」이 생겼다. 주먹밥 한 덩이가 이렇게 돌아왔다.']]),
+    resolve: (s) => say(addPoiAhead(s, 'TREASURE', rand(['tr_carving', 'tr_ruin', 'tr_swordgrave']), '거지가 알려 준 곳'), [['나레이션', '이 근방에 「거지가 알려 준 곳」이 생겼다. 주먹밥 한 덩이가 이렇게 돌아왔다.']]),
   },
   {
     key: 'c_bandit_escort',
@@ -396,9 +396,9 @@ export const CONDITIONAL_EVENTS: JourneyEventDef[] = [
       category: 'LIFE',
       narration: '고개 위에서 칼 든 사내들이 내려온다. 그런데 칼을 거꾸로 들고 있다.',
       script: [P('산적 부하', '두목이 그러더이다. 그날 목숨 살려 준 양반이 이 길을 지나면 털끝 하나 건드리지 말라고. 고개 끝까지 모시겠소.', '머리를 긁으며')],
-      options: [{ id: 'ok', label: '못 이기는 척 호위를 받는다', hint: '이 구간의 매복이 사라진다' }],
+      options: [{ id: 'ok', label: '못 이기는 척 호위를 받는다', hint: '이 일대의 매복이 사라진다' }],
     }),
-    resolve: (s) => say(clearAmbushes(s), [['나레이션', '산적들이 앞서 걸으며 길을 텄다. 이 구간에서는 아무도 앞을 막지 않을 것이다.']]),
+    resolve: (s) => say(clearAmbushes(s), [['나레이션', '산적들이 앞서 걸으며 길을 텄다. 이 일대에서는 아무도 앞을 막지 않을 것이다.']]),
   },
   // ───────── 수행의 처음과 끝 ─────────
   {

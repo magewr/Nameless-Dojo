@@ -278,7 +278,7 @@ const ferry = sceneEvent({
           if ((n.journey?.pois.length || 0) > before) {
             return say(n, [
               [ferryman(s), '건너편 언덕 너머에 이끼 낀 비석이 하나 있소. 그 양반이 거기다 뭘 새기고 갔다는 말이 있지.'],
-              ['나레이션', '이 길 앞쪽에 「사공이 일러 준 비석」이 생겼다.'],
+              ['나레이션', '이 근방에 「사공이 일러 준 비석」이 생겼다.'],
             ]);
           }
           return say(n, [
@@ -2597,7 +2597,7 @@ const fortune = sceneEvent({
       },
       resolve: (s, opt) => {
         if (opt === 'charm') {
-          return say(clearAmbushes(addRep(addMoney(s, -10), { arcane: 3 })), [['나레이션', '부적을 봇짐에 매달았다. 이상하게도 그 뒤로 이 길은 조용했다. 우연이겠지만. (이단 +3, 이 구간의 매복이 사라졌다)']]);
+          return say(clearAmbushes(addRep(addMoney(s, -10), { arcane: 3 })), [['나레이션', '부적을 봇짐에 매달았다. 이상하게도 그 뒤로 이 길은 조용했다. 우연이겠지만. (이단 +3, 이 일대의 매복이 사라졌다)']]);
         }
         if (opt === 'laugh') return say(addStats(s, { wil: 1 }), [['나레이션', '「칼끝에서 피 보는 게 무인의 일이오.」 점쟁이가 혀를 찼다. (정신 +1)']]);
         return s;

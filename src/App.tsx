@@ -47,7 +47,7 @@ import { DojoSimView } from './components/DojoSimView';
 import { JourneyView } from './components/JourneyView';
 import { TournamentView } from './components/TournamentView';
 import { closeTourney, nextQualifier, simulatePendingMatches, startHeroMatch, watchMatch } from './engine/tourney';
-import { enterLeg, finishJourney, openPoi, startJourney, syncWalk } from './engine/journey';
+import { finishJourney, normalizeJourney, openPoi, startJourney, stepJourney } from './engine/journey';
 import { AutoBattleView } from './components/AutoBattleView';
 import { TrainingAndCraftingModal } from './components/TrainingAndCraftingModal';
 import { DojoAndWeaponsModal } from './components/DojoAndWeaponsModal';
@@ -249,7 +249,8 @@ export function App() {
       if (!loaded.milestones) loaded.milestones = [];
       // 문파 관계·문하생 기질이 없던 시절의 세이브는 지금 난이도에 맞춰 채운다.
       // 대회 관전에서 남이 쓴 술법이 내 기록으로 남았던 세이브도 여기서 바로잡는다.
-      setState(ensureSectsAndTemperaments(repairPhantomMagicRecord(loaded)));
+      // 좌우로 걷던 시절의 무사수행 도중 세이브는 지도 위로 옮긴다.
+      setState(normalizeJourney(ensureSectsAndTemperaments(repairPhantomMagicRecord(loaded))));
       setCreating(false);
     }
   };
@@ -513,9 +514,8 @@ export function App() {
           state={state}
           hasOverlay={journeyOverlay}
           onSceneReady={() => setSceneReady(true)}
-          onSync={(x, walked) => setState((prev) => (prev && prev.journey ? syncWalk(prev, x, walked) : prev))}
+          onStep={(dx, dy) => setState((prev) => (prev && prev.journey ? stepJourney(prev, dx, dy) : prev))}
           onInteract={(poiId) => setState((prev) => (prev && prev.journey && !prev.activeEvent ? openPoi(prev, poiId) : prev))}
-          onChooseLeg={(legId) => setState((prev) => (prev && prev.journey ? enterLeg(prev, legId) : prev))}
           onFinish={() => setState((prev) => (prev && prev.journey ? finishJourney(prev) : prev))}
         />
       ) : (

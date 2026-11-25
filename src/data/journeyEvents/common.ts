@@ -2,6 +2,7 @@ import { hasBatchim, josa } from '../../utils/korean';
 import { GameState, SceneDialogueLine } from '../../types/game';
 import {
   addFame,
+  addPoiAhead,
   addHealth,
   addMoney,
   addRep,
@@ -418,20 +419,15 @@ const inn: JourneyEventDef = {
       n = addStats(n, { ins: 1 });
       const talker = v.talker(s);
       if (chance(0.5) && n.journey) {
-        const j = n.journey;
         const lead = rand(INN_LEADS);
-        const x = Math.min(j.legLength - 120, j.heroX + 300 + Math.random() * 400);
-        n = {
-          ...n,
-          journey: {
-            ...j,
-            pois: [...j.pois, { id: `poi_lead_${n.turn}_${Math.random().toString(36).slice(2, 5)}`, kind: 'TREASURE', eventKey: lead.key, x, label: '소문의 장소' }],
-          },
-        };
-        return say(n, [
-          [talker, lead.line(n)],
-          ['나레이션', '이 길 앞쪽에 「소문의 장소」가 생겼다. (통찰 +1)'],
-        ]);
+        const before = n.journey.pois.length;
+        n = addPoiAhead(n, 'TREASURE', lead.key, '소문의 장소');
+        if (n.journey && n.journey.pois.length > before) {
+          return say(n, [
+            [talker, lead.line(n)],
+            ['나레이션', '이 근방에 「소문의 장소」가 생겼다. 지도에 표시해 두었다. (통찰 +1)'],
+          ]);
+        }
       }
       const rumors = rumorsFor(n.country, n.year);
       return say(n, [
