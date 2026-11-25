@@ -122,7 +122,7 @@ function resolveGridCell(
 
   // ★ 2순위: 남성 / 고유 직군 NPC 정확 매칭 ★
   if (role === 'MERCHANT') return { src: npcSrc, col: 0, row: 0 };
-  if (role === 'HERMIT' || /(노고수|은둔|도사|검선|검존|대사|장군|검호)/.test(hint)) return { src: npcSrc, col: 3, row: 2 };
+  if (role === 'HERMIT' || /(노고수|은둔|도사|검선|검존|대사|장군|검호|술사|방사|음양사|이인)/.test(hint)) return { src: npcSrc, col: 3, row: 2 };
   if (role === 'ELDER' || /(영감|노인|쌀가게|집주인|늙은 도장주)/.test(hint)) return { src: npcSrc, col: 1, row: 0 };
   if (role === 'OFFICER' || /(관군|포도청|교관|토벌|장교|종사관|집행관)/.test(hint)) return { src: npcSrc, col: 2, row: 2 };
   if (role === 'WESTERN' || /(서양|선교사|선원|앙리|잭|헨리|빌럼|유럽|통역)/.test(hint)) return { src: npcSrc, col: 2, row: 1 };

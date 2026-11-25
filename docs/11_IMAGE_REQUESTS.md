@@ -8,9 +8,9 @@
 | 우선순위 | 장수 | 내용 |
 |---|---|---|
 | P1 | 22 | 없는 파일 4 · 일본 도장 맵 2 · 조선/청 진검 무대 2 · 맹수 스프라이트 5 · 엔딩 6 · 서막 3 |
-| P2 | 15 | 노년 연대기 삽화 6 · 은거 고수 9 |
+| P2 | 19 | 노년 연대기 삽화 6 · 은거 고수 9 · 이계 사건 4 |
 | P3 | 12 | 무술대회 무대 3 · 온보딩 사건 2 · 대오의 자리 6 · 금기 사망 1 |
-| 합계 | 49 | |
+| 합계 | 53 | |
 
 ## 지금 깨져 있는 참조
 
@@ -404,6 +404,38 @@ An open practice ground in a castle town in Satsuma, Kyushu, Edo-period Japan. A
 
 ---
 
+### P2-3. 이계 사건 4장 (2026-11-25 추가)
+
+이계 기술을 배울 길을 넓히면서 새로 넣은 무사수행 사건입니다(`src/data/journeyEvents/arcane.ts`). 지금은 그림 없이 나옵니다. 사건 창 삽화라 1280×720이고, 주제는 세로 가운데에 둡니다. 술법의 빛은 이 그림들의 유일한 강한 광원으로 쓰고, 과장된 판타지 이펙트보다 "조선·청·에도의 풍경 속에 이상한 것 하나"로 그립니다.
+
+**`px_jr_arcane_kr.jpg`** · 「이계의 은자 — 산신각의 이인(異人)」(`arcane_kr_hermit`, 조선 지역 은거 고수 자리)
+눈 덮인 산신각 뒤 너럭바위에 홑옷 차림의 사내가 앉아 있고, 그가 앉은 자리만 눈이 녹아 김이 오른다.
+
+```text
+A small Korean mountain-spirit shrine (sansingak) with a tiled roof deep in a snowy pine forest, Joseon dynasty, 18th century. Behind the shrine, on a broad flat boulder, sits a lean man in a thin single-layer white hemp robe, cross-legged, eyes closed. Everything around is covered in deep snow, but a perfect circle of bare wet rock surrounds him and white steam rises from it, glowing faintly orange from within as if from hidden embers. A traveling swordsman with a straw hat stands small in the foreground snow, looking at him. Cold blue-gray winter light with one warm orange glow at the center. Detailed 2D pixel art in the style of a late-1990s 32-bit JRPG cutscene, painterly pixel shading with fine dithering, crisp visible square pixels, muted earthy palette with one strong accent light, cinematic wide shot with small figures, layered atmospheric depth, darker and simpler foreground along the bottom edge, 16:9, 1280x720, no text, no letters, no UI, no border, no watermark.
+```
+
+**`px_jr_arcane_cn.jpg`** · 「이계의 은자 — 곤륜에서 내려온 방사(方士)」(`arcane_cn_hermit`, 청 지역 은거 고수 자리)
+골짜기에 연단로 연기가 피어오르고, 그을린 도포의 방사가 화로에 부채질을 하다 고개를 든다.
+
+```text
+A misty mountain gorge in Qing-dynasty China with sheer karst cliffs and pine trees. On a stone ledge stands a bronze alchemical furnace (liandan lu) on three legs, thick blue-white smoke curling up from it, a faint blue electric crackle dancing inside the smoke. A Taoist fangshi alchemist with a topknot and soot-stained gray robes, holding a palm-leaf fan, turns his head toward a visiting swordsman who stands small on the path below. Jars, scrolls and herbs around the furnace. Cool jade-and-gray palette with one bright blue-white accent. Detailed 2D pixel art in the style of a late-1990s 32-bit JRPG cutscene, painterly pixel shading with fine dithering, crisp visible square pixels, muted earthy palette with one strong accent light, cinematic wide shot with small figures, layered atmospheric depth, darker and simpler foreground along the bottom edge, 16:9, 1280x720, no text, no letters, no UI, no border, no watermark.
+```
+
+**`px_jr_arcane_jp.jpg`** · 「이계의 은자 — 음양사(陰陽師)」(`arcane_jp_hermit`, 일본 지역 은거 고수 자리)
+종이 학 한 마리를 따라가니 작은 사당 앞에서 흰 가리기누 차림의 음양사가 부적을 접고 있다.
+
+```text
+A tiny weathered Shinto roadside shrine in a cedar forest at dusk, Edo-period Japan, with a small vermilion torii and stone lanterns. In front of it an onmyoji in a white kariginu robe and black eboshi cap kneels, folding paper talismans. A single folded paper crane glows softly and floats in the air between him and a ronin who has just arrived on the path, small in the foreground. Paper ofuda charms hang from a rope. Deep indigo and moss-green palette with one soft pale-gold glow from the paper crane. Detailed 2D pixel art in the style of a late-1990s 32-bit JRPG cutscene, painterly pixel shading with fine dithering, crisp visible square pixels, muted earthy palette with one strong accent light, cinematic wide shot with small figures, layered atmospheric depth, darker and simpler foreground along the bottom edge, 16:9, 1280x720, no text, no letters, no UI, no border, no watermark.
+```
+
+**`px_jr_meteor.jpg`** · 「별똥별이 떨어진 자리」(`tr_meteor`, 보물 자리, 세 나라 공통)
+나무가 부채꼴로 쓰러진 숲 한가운데 움푹 꺼진 구덩이, 바닥의 검은 돌이 아직 따뜻해 김을 낸다.
+
+```text
+A forest clearing at dawn after a meteor strike, East Asian mountains. Tall pine trees lie flattened outward in a fan pattern around a shallow scorched crater. At the bottom of the crater sits a fist-sized black stone with faint glowing red cracks, thin steam rising from it into the cold air. A lone swordsman crouches at the crater's rim, reaching a hand toward the stone. Blue pre-dawn light, smoke and mist, one deep red-orange glow from the stone. Detailed 2D pixel art in the style of a late-1990s 32-bit JRPG cutscene, painterly pixel shading with fine dithering, crisp visible square pixels, muted earthy palette with one strong accent light, cinematic wide shot with small figures, layered atmospheric depth, darker and simpler foreground along the bottom edge, 16:9, 1280x720, no text, no letters, no UI, no border, no watermark.
+```
+
 ## P3. 있으면 좋은 장면 (12장)
 
 자주 보는 장면만 골랐습니다. 위에서부터 우선입니다.
@@ -526,10 +558,11 @@ Aftermath of a forbidden sword technique at night: a lone swordsman kneels motio
 | `px_jr_tiger`, `px_jr_canal_procession`, `px_jr_refugees`, `px_jr_dejima` | `history.ts:326`, `373`, `516`, `829` | 없음. 경로가 이미 들어 있어 파일만 넣으면 나옵니다. |
 | `px_dojo_jp_ruin`, `px_dojo_jp_grand` | `spriteLoader.ts:724` | `getDojoMapSrc()`에 `if (country === 'JAPAN') return isGrand ? '/assets/px_dojo_jp_grand.jpg' : '/assets/px_dojo_jp_ruin.jpg';`를 넣고 범용 맵은 마지막 대체로 남깁니다. 프리로드 목록(`spriteLoader.ts:828-833`)에 두 장 추가. 메인 화면, 엔딩, 서막은 모두 이 함수를 거치므로 따로 고칠 곳은 없습니다. |
 | `px_battle_duel_stage_kr`, `_cn` | `spriteLoader.ts:725` 다음, `AutoBattleView.tsx:1858`, `EndingReportView.tsx:71`, `77` | `getDojoMapSrc()` 옆에 `getBattleStageSrc(country, { isRealDuel, isTournament })`를 만들고 1858행에서 `state.country`로 부릅니다(일본은 기존 `px_battle_duel_stage.jpg`). 엔딩 71·77행의 진검 전사 배경도 같은 함수로 바꿉니다. 프리로드(`spriteLoader.ts:834-835`)에 추가. |
-| (같은 곳의 버그) | `EndingReportView.tsx:54` | `state.deathCause === '진검결투 전사'`를 `(state.deathCause \|\| '').startsWith('진검결투 전사')`로. 무사수행 중 전사(`journey.ts:406`)도 진검 무대로 나오게 됩니다. |
+| (같은 곳의 버그) | `EndingReportView.tsx:54` | 고쳤습니다(`startsWith('진검결투 전사')`). 무사수행 중 전사도 진검 무대로 나옵니다. |
 | `grid_enemy_beast_{tiger,bear,wolf,boar}_8f` | `spriteLoader.ts:790` | `getEnemyFightGridSrc()` 맨 앞에서 이름으로 판별합니다. `/(산군\|호랑이\|표범)/`→tiger, `/곰/`→bear, `/(늑대\|들개)/`→wolf, `/멧돼지/`→boar. 현재 데이터에서 사람 이름과 겹치지 않는 것을 확인했습니다. `범`은 「범을 잡던 관서의 사냥꾼」(`masters.ts:80`, 사람)과 겹치므로 쓰지 않습니다. |
 | (같은 시트) | `AutoBattleView.tsx:1876`, `1990`, `2507` | `176 / refHeight`의 기준 높이를 맹수 시트일 때 120 안팎으로 낮춥니다. 0번 프레임 높이로 맞추면 네 발 짐승은 몸길이가 사람의 두 배 가까이 됩니다. |
 | `grid_ko_beast_4x2` | `AutoBattleView.tsx:1924-1944`, `spriteLoader.ts:799-823` | 적이 맹수 시트면 KO 시트를 `/assets/grid_ko_beast_4x2.jpg`로, 인덱스는 호랑이 0, 곰 1, 늑대 2, 멧돼지 3, `f.yielded`면 +4. 이 시트는 전부 왼쪽을 보므로 1943-1944행의 `koIdx === 0`이면 오른쪽이라는 규칙에서 빼야 합니다. |
+| `px_jr_arcane_kr`, `_cn`, `_jp`, `px_jr_meteor` | `src/data/journeyEvents/arcane.ts`의 `HERMITS` 정의와 `meteor.build` | `HermitDef`에 `illustration` 필드를 더해 세 은자에 각각 경로를 넣고, `build`의 반환값에 `illustration: h.illustration`을 넣습니다. 운석은 `meteor.build` 반환값에 `illustration: '/assets/px_jr_meteor.jpg'` 한 줄. |
 | `px_end_funeral` | `EndingReportView.tsx:86` | 단절 루트가 아니면 `'/assets/px_end_funeral.jpg'`, 단절이면 지금처럼 `getDojoMapSrc(state.country, 1)`. |
 | `px_chr_succession_{intact,flourish,degraded,scattered}` | `chronicleText.ts:9-13`, `27-47`, `chronicleBuilder.ts:146-155` | `Fragment`에 `image?: string` 추가, `SUCCESSION_OPENING` 네 항목에 `image: IMG('succession_intact')` 등, `openingEntry`에 `image: opening.image`. |
 | `px_chr_extinct_beam` | `chronicleText.ts:503`, `chronicleBuilder.ts:131` | `image: ''`를 `IMG('extinct_beam')`으로 바꾸고, 131행 항목에 `image: EXTINCT[0].image`를 넣습니다. 지금은 값이 있어도 넘기지 않습니다. |

@@ -21,7 +21,7 @@ import {
 } from '../data/journeyRegions';
 import { addFame, addHealth, highlight, JCtx, JourneyEventDef, isDone, markDone, triggerMet } from './journeyCore';
 import { getDifficultyId } from '../data/difficulty';
-import { BattleOutcomePayload } from './gameLogic';
+import { BattleOutcomePayload, REAL_DUEL_RUTHLESS } from './gameLogic';
 import { SceneDialogueLine } from '../types/game';
 import { addLog } from './log';
 
@@ -341,9 +341,11 @@ export function applyJourneyBattle(s: GameState, battle: BattleConfig, victory: 
   const [, key, opt] = (battle.eventFollowupId || '').split('|');
   const def = getJourneyEventDef(key);
   let base = s;
-  // 길 위의 진검승부는 살생이 아니다. 도장 전투 정산이 진검 승리에 얹는 살기(+12)를 덜어 낸다 — 살의를 품은 상대를 꺾었을 때만 조금 남긴다.
+  // 길 위의 진검승부는 살생이 아니다. 도장 전투 정산이 진검 승리에 얹는 살기(REAL_DUEL_RUTHLESS)를 덜어 낸다.
+  // 길 위의 살기는 「벤다 / 살려 보낸다」 같은 선택에서만 붙는다 — 예전에는 살의를 품은 상대를 꺾을 때마다 조금씩 남아,
+  // 산적을 자주 만난 사람일수록 저절로 「살인검」의 엔딩으로 기울었다.
   if (victory && battle.journeyStakes && s.phase !== 'ENDING') {
-    base = { ...base, reputation: { ...base.reputation, ruthless: Math.max(0, base.reputation.ruthless - (battle.journeyStakes === 'HOSTILE' ? 8 : 12)) } };
+    base = { ...base, reputation: { ...base.reputation, ruthless: Math.max(0, base.reputation.ruthless - REAL_DUEL_RUTHLESS) } };
   }
   if (!def?.onBattle || base.phase === 'ENDING') return { ...base, journeyBattleCtx: null };
   const ctx: JCtx = { key, region: currentRegion(base), data: base.journeyBattleCtx || undefined };
@@ -373,7 +375,7 @@ export function applyJourneyDefeat(state: GameState, battle: BattleConfig, outco
   };
   // 술법·금기 초식의 흔적은 도장의 전투 정산과 똑같이 남는다
   if (outcome.usedMagic) {
-    next = { ...next, flags: { ...next.flags, usedMagicPublicly: true, magicCastCount: next.flags.magicCastCount + 1 }, reputation: { ...next.reputation, arcane: next.reputation.arcane + 12 } };
+    next = { ...next, flags: { ...next.flags, usedMagicPublicly: true, magicCastCount: next.flags.magicCastCount + 1 }, reputation: { ...next.reputation, arcane: next.reputation.arcane + 6 } };
   }
   if (outcome.usedForbidden) {
     next = {

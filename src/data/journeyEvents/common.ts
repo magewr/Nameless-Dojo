@@ -20,6 +20,7 @@ import {
   P,
   pickBook,
   rand,
+  remember,
   roadScale,
   say,
   spendDays,
@@ -375,8 +376,10 @@ export const COMMON_EVENTS: JourneyEventDef[] = [
     key: 'tr_sealed',
     kind: 'TREASURE',
     label: () => '봉인된 상자',
-    once: true,
-    weight: 0.5,
+    // 일생에 세 번까지 (예전에는 한 번뿐이고 가중치도 낮아 금서를 만날 길이 거의 없었다)
+    once: false,
+    weight: 0.9,
+    cond: (s) => Number(s.flags.storyMemory?.sealed_boxes || 0) < 3,
     build: () => ({
       title: '부적으로 봉인된 상자',
       category: 'FANTASY',
@@ -387,7 +390,7 @@ export const COMMON_EVENTS: JourneyEventDef[] = [
         N('상자에 손을 대자 손끝이 차갑게 저려 온다. 안에서 무언가가 기다리고 있다.'),
       ],
       options: [
-        { id: 'open', label: '봉인을 뜯는다', hint: '⚠ 이계의 금서 — 이단 세평' },
+        { id: 'open', label: '봉인을 뜯는다', hint: '이계의 금서 — 이단 +12' },
         { id: 'bury', label: '더 깊이 묻고 돌을 얹는다', hint: '구도' },
         { id: 'leave', label: '못 본 척한다' },
       ],
@@ -395,7 +398,7 @@ export const COMMON_EVENTS: JourneyEventDef[] = [
     resolve: (s, opt) => {
       if (opt === 'open') {
         const id = pickBook(s, (b) => b.rarity === 'GRIMOIRE');
-        let n = addRep(s, { arcane: 12 });
+        let n = addRep(remember(s, 'sealed_boxes', String(Number(s.flags.storyMemory?.sealed_boxes || 0) + 1)), { arcane: 12 });
         if (id) {
           const g = giveBook(n, id, 0);
           n = highlight(g.state, `봉인된 상자에서 ${josa(g.title || '', '을를')} 꺼냈다`);

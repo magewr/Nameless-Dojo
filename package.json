@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:bot": "npx esbuild scripts/playtestBot.ts --bundle --platform=node --outfile=/tmp/playtestBot.cjs && node /tmp/playtestBot.cjs",
-    "test:elder": "npx esbuild scripts/elderBench.ts --bundle --platform=node --outfile=/tmp/elderBench.cjs && node /tmp/elderBench.cjs"
+    "test:elder": "npx esbuild scripts/elderBench.ts --bundle --platform=node --outfile=/tmp/elderBench.cjs && node /tmp/elderBench.cjs",
+    "test:ending": "npx esbuild scripts/endingBench.ts --bundle --platform=node --outfile=/tmp/endingBench.cjs && node /tmp/endingBench.cjs"
   },
   "dependencies": {
     "lucide-react": "^1.0.0",

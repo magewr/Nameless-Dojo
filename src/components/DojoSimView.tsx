@@ -198,7 +198,7 @@ function resolveVisitorWalk(ev: NonNullable<GameState['activeEvent']>, state: Ga
     return { src: '/assets/sheet_walk_disciple.jpg', isSheet: true, rows: 1, rowIndex: 0 };
   }
   if (old) return sheet(getHeroWalkSpriteInfo(c, 'MALE', 60));
-  if (/(의원|농부|상인|거상|선비|서생|문인|집주인|이장|관리|사또|지현|다이칸|아전|하인|머슴|짐꾼|나그네|통역|사신|역관|화공|주인|어부|목수|대장장이)/.test(hint)) {
+  if (/(의원|농부|상인|거상|선비|서생|문인|집주인|이장|관리|사또|지현|다이칸|아전|하인|머슴|짐꾼|나그네|통역|사신|역관|화공|주인|어부|목수|대장장이|술사|방사|음양사|도사|연금술사|양인)/.test(hint)) {
     return sheet(getHeroWalkSpriteInfo(c, 'MALE', 40));
   }
   return { src: '/assets/sp_enemy_top.jpg', isSheet: false, rows: 1, rowIndex: 0 };

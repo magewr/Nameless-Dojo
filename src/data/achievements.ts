@@ -193,7 +193,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   {
     id: 'ach_merchant_grimoire',
     title: '금단의 서책',
-    description: '만물객에게서 세상의 이치를 벗어난 이계 금서를 손에 넣었다.',
+    description: '세상의 이치를 벗어난 이계 금서를 손에 넣었다.',
     category: 'SECRET',
     secret: true,
     check: (s) => s.books.some((b) => b.rarity === 'GRIMOIRE'),

@@ -246,22 +246,21 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       narration: `눈덩이처럼 불어난 빚(${state.debt}${cMeta.currency}) 때문에 전당포 사내들이 몽둥이와 진검을 차고 도장을 에워쌌다.`,
       speaker: '전당포 두목',
       dialogue: '“이제 말로 할 때는 지났다. 도장 집기를 팔아 갚든, 내 밑에서 해결사 노릇을 하든, 아니면 나랑 진검으로 끝장을 보든 골라!”',
-      // 늙은 도장주가 전당포 해결사 노릇을 할 수는 없다 — 예순이 넘으면 제자들이 나서거나 땅을 판다
-      options:
-        state.age >= 62
+      // 빚을 갚는 길이 해결사·진검결투뿐이면, 덕을 쌓아 온 도장주도 빚에 몰리는 순간 살인검으로 기울어 버린다.
+      // 제자들이 품을 팔거나, 땅을 팔거나, 도장주가 직접 한 해 품을 파는 길을 나이와 상관없이 열어 둔다.
+      options: [
+        ...(state.disciples.filter((d) => !d.dead && !d.isChild).length >= 2
+          ? [{ id: 'debt_disciples', label: '제자들이 품을 팔아 빚을 갚겠다고 나선다', hint: '빚 전액 탕감 · 인덕 +6 · 한 해 동안 제자들이 고생한다 · 문하생 충성↑' }]
+          : []),
+        ...(state.facilities.yard > 1 ? [{ id: 'debt_sell_land', label: '연무장 땅 절반을 팔아 빚을 갚는다', hint: '빚 전액 탕감 · 연무장 1단계 축소' }] : []),
+        ...(state.age < 62
           ? [
-              ...(state.disciples.filter((d) => !d.dead && !d.isChild).length >= 2
-                ? [{ id: 'debt_disciples', label: '제자들이 품을 팔아 빚을 갚겠다고 나선다', hint: '빚 전액 탕감 · 한 해 동안 제자들이 고생한다 · 문하생 충성↑' }]
-                : []),
-              ...(state.facilities.yard > 1
-                ? [{ id: 'debt_sell_land', label: '연무장 땅 절반을 팔아 빚을 갚는다', hint: '빚 전액 탕감 · 연무장 1단계 축소' }]
-                : []),
-              { id: 'debt_enforcer', label: '늙은 몸으로 전당포의 해결사 노릇을 한다', hint: '빚 전액 탕감 · 살기 +20 · 명성 -15 · 건강 -8' },
-            ]
-          : [
+              { id: 'debt_labor', label: '한 해 동안 장터 짐꾼·표국 일꾼으로 직접 품을 판다', hint: '빚 전액 탕감 · 건강 -10 · 명성 -8 · 상무 +10' },
               { id: 'debt_enforcer', label: '해결사 일을 1년간 맡아 빚을 탕감한다', hint: '빚 전액 탕감 · 살기 +20 · 명성 -15' },
               { id: 'debt_duel', label: '“내 목숨을 걸고 빚을 청산하겠다!” (진검결투)', hint: '⚠ 패배 시 사망/장애 · 승리 시 빚 전액 소멸 + 살기 +30' },
-            ],
+            ]
+          : [{ id: 'debt_enforcer', label: '늙은 몸으로 전당포의 해결사 노릇을 한다', hint: '빚 전액 탕감 · 살기 +20 · 명성 -15 · 건강 -8' }]),
+      ],
     };
   }
 

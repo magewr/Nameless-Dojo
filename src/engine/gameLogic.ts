@@ -716,8 +716,8 @@ export function generateMerchantOffer(state: GameState): MerchantOffer {
   const b3 = Math.random() < westProb ? pick(westerns) : pick(legends);
   if (b3 && !chosenBooks.some((c) => c.id === b3.id)) chosenBooks.push(toBook(b3));
 
-  // 극악 히든 이계 금서 (2% ~ 최대 5.5% 수준 유지)
-  const grimoireChance = state.turn < 8 ? 0.015 : Math.min(0.055, 0.02 + state.fame * 0.00012 + (state.country === 'JAPAN' ? 0.008 : 0));
+  // 이계 금서 (처음 7% → 명성이 오를수록 최대 16%). 예전 2~5.5%로는 일생에 두어 번 스쳐 갈 뿐이라 이계의 길이 사실상 닫혀 있었다.
+  const grimoireChance = state.turn < 8 ? 0.04 : Math.min(0.16, 0.07 + state.fame * 0.00004 + (state.country === 'JAPAN' ? 0.02 : 0));
   let hasGrimoire = false;
   if (grimoires.length > 0 && Math.random() < grimoireChance) {
     const grim = pick(grimoires)!;
@@ -1834,6 +1834,13 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       next.disciples = next.disciples.map((d) => (d.dead || d.isChild ? d : { ...d, loyalty: Math.min(100, d.loyalty + 6), stats: { ...d.stats, vit: d.stats.vit + 1 } }));
       next.reputation = { ...next.reputation, virtue: next.reputation.virtue + 6 };
       return addLog(next, '제자들이 한 해 동안 장터 짐꾼과 표국 호위로 품을 팔아 스승의 빚을 갚았다. 그해 마당은 저녁에만 붐볐다.', 'GOOD');
+    case 'debt_labor':
+      next.debt = 0;
+      next.debtTurns = 0;
+      next.health = Math.max(1, next.health - 10);
+      next.fame = Math.max(0, next.fame - 8);
+      next.reputation = { ...next.reputation, commerce: next.reputation.commerce + 10 };
+      return addLog(next, '한 해 동안 새벽엔 장터 짐을 지고 밤엔 표국 수레를 지켰다. 빚은 다 갚았지만, 「도장주가 짐꾼 노릇을 한다」는 말이 돌았다. (건강 -10, 명성 -8, 상무 +10)', 'WARN');
     case 'debt_sell_land':
       next.debt = 0;
       next.debtTurns = 0;
@@ -3024,7 +3031,9 @@ export function executeScheduleActivity(
         });
         discipleBadgeText = `문하생 ${aliveCount}명 합동 연마`;
       }
-      next.reputation.ascetic += Math.max(1, Math.round(2 * eff));
+      // 술법(이계 초식)을 닦는 계절은 구도가 아니라 이단의 세평으로 쌓인다 — 마당에서 불꽃이 이는 걸 다들 본다.
+      if (sk.origin.includes('FANTASY')) next.reputation.arcane += Math.max(1, Math.round(3 * eff));
+      else next.reputation.ascetic += Math.max(1, Math.round(2 * eff));
       floatingText = `${updated.customName || updated.name} +${expGain}`;
       floatingColor = leveledUp ? '#fde047' : '#fbbf24';
       feedLines.push({
@@ -3415,7 +3424,8 @@ export function executeScheduleActivity(
         if (Math.random() < 0.75) next.stats.wil += 1;
         if (Math.random() < 0.7) next.stats.qi += 1;
         if (Math.random() < 0.5) next.stats.ins += 1;
-        next.reputation.ascetic += Math.max(1, Math.round(3 * eff));
+        if (sk.origin.includes('FANTASY')) next.reputation.arcane += Math.max(1, Math.round(3 * eff));
+        else next.reputation.ascetic += Math.max(1, Math.round(3 * eff));
 
         floatingText = `깨달음 ${insight}%`;
         floatingColor = '#c084fc';
@@ -3652,6 +3662,9 @@ export interface BattleOutcomePayload {
   fatalWoundsDealt?: number;
 }
 
+// 진검 승리 한 번이 남기는 살기. 무사수행 정산(applyJourneyBattle)이 이 값을 기준으로 덜어 내므로 함께 움직인다.
+export const REAL_DUEL_RUTHLESS = 4;
+
 // 실시간 전투 종료 후 상태 정산
 const PHANTOM_MAGIC_EVENTS = ['fan_first_shock', 'fan_inquisition', 'fan_missionary', 'fan_royal_summon'];
 
@@ -3673,7 +3686,7 @@ export function repairPhantomMagicRecord(state: GameState): GameState {
       // 잘못 열린 충격 이벤트는 나중에 진짜로 술법을 드러냈을 때 다시 일어날 수 있게 되돌린다.
       triggeredEvents: f.triggeredEvents.filter((id) => !PHANTOM_MAGIC_EVENTS.includes(id)),
     },
-    reputation: { ...state.reputation, arcane: Math.max(0, state.reputation.arcane - 12 * (f.magicCastCount || 0)) },
+    reputation: { ...state.reputation, arcane: Math.max(0, state.reputation.arcane - 6 * (f.magicCastCount || 0)) },
     milestones: (state.milestones || []).filter((m) => m.key !== 'MAGIC_PUBLIC'),
   };
 }
@@ -3753,7 +3766,8 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
       usedMagicPublicly: true,
       magicCastCount: next.flags.magicCastCount + 1,
     };
-    next.reputation = { ...next.reputation, arcane: next.reputation.arcane + 12 };
+    // 술법을 쓴 싸움 한 번에 +6. 예전 +12는 일생 수십 번의 싸움만으로 수백이 쌓여, 한 번 배운 사람은 누구나 이계로 기억됐다.
+    next.reputation = { ...next.reputation, arcane: next.reputation.arcane + 6 };
   }
   if (outcome.usedForbidden) {
     next.flags = { ...next.flags, forbiddenCastCount: next.flags.forbiddenCastCount + 1 };
@@ -3980,7 +3994,9 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
 
     if (battle.isRealDuel) {
       next.flags = { ...next.flags, realDuelWins: next.flags.realDuelWins + 1 };
-      next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 12 };
+      // 진검 승리 자체는 살기를 조금만 남긴다. 살기의 큰 몫은 쓰러진 상대를 베느냐 살리느냐(처분 선택)에서 온다 —
+      // 예전 +12는 산적을 자주 만난 사람일수록 저절로 「피의 도장」이 되게 만들었다.
+      next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + REAL_DUEL_RUTHLESS };
     } else {
       next.flags = { ...next.flags, sparringWins: next.flags.sparringWins + 1 };
       next.reputation = { ...next.reputation, virtue: next.reputation.virtue + 2 };
