@@ -165,7 +165,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     title: '핏줄과 무도의 계승',
     description: '친자녀를 문하에 들여 무술을 전수했다.',
     category: 'LIFE',
-    check: (s) => s.disciples.some((d) => d.isChild),
+    check: (s) => s.disciples.some((d) => d.isChild && !d.adopted),
   },
   {
     id: 'ach_rival_4',

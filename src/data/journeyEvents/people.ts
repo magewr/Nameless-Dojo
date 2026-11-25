@@ -20,7 +20,10 @@ import {
   journeyBattle,
   N,
   P,
+  clearAmbushes,
+  freshFactor,
   pickBook,
+  pickFresh,
   rand,
   remember,
   roadScale,
@@ -132,7 +135,7 @@ export const PEOPLE_EVENTS: JourneyEventDef[] = [
     }),
     resolve: (s, opt) => {
       if (opt === 'take') {
-        const a = addDisciple(s, { isGenius: true, isChild: true, childTalent: 'PRODIGY', archetype: '길에서 거둔 아이', temperament: 'DILIGENT' });
+        const a = addDisciple(s, { isGenius: true, isChild: true, adopted: true, childTalent: 'PRODIGY', archetype: '길에서 거둔 아이', temperament: 'DILIGENT' });
         return say(highlight(a.state, `개울가의 아이 ${josa(a.name, '을를')} 거두었다`), [
           ['나레이션', `아이의 이름은 ${a.name}. 나뭇가지를 꼭 쥔 채 뒤를 따라왔다. (천재 문하생 입문)`],
         ]);
@@ -328,30 +331,54 @@ export const PEOPLE_EVENTS: JourneyEventDef[] = [
     label: () => '타 문파 무리',
     cond: (s) => metSects(s).length > 0,
     build: (s) => {
-      const sect = rand(metSects(s));
+      // 최근 길에서 마주친 문파는 피하고, 사이에 따라 장면이 다르다 — 사이가 좋으면 시비 대신 반가운 만남
+      const met = metSects(s);
+      const sect = [...met].sort((a, b) => freshFactor(s, `p_sect:s_${b.id}`) * (0.5 + Math.random()) - freshFactor(s, `p_sect:s_${a.id}`) * (0.5 + Math.random()))[0];
+      const name = sect.name.replace(/\(.*?\)/g, '').trim(); // 제목·대사에는 한자 없이
+      const friendly = sect.relation >= 30;
+      const inn = byCountry(s, '주막', '객잔', '찻집');
+      const eatery = byCountry(s, '장터 국밥집', '저잣거리 국숫집', '장터 소바 가게');
+      const greet = byCountry(s, '포권한다', '포권한다', '허리 숙여 인사한다');
+      const fameLine = s.fame >= 400 ? `${s.sectName}의 ${s.name}? 소문만큼 대단한지 어디 보자.` : `${s.sectName}? 들어 본 적 없는 이름인데. 우리 사형께 인사라도 하고 지나가시지.`;
+      const v = pickFresh(s, 'p_sect', [
+        { id: 'inn', when: () => !friendly, title: `${name} 제자들의 시비`, scene: `${inn} 앞, ${sect.name}의 문양을 단 제자들이 길을 막는다.`, line: fameLine, dir: '팔짱을 끼며' },
+        { id: 'bridge', when: () => !friendly, title: `외나무다리 위의 ${name} 제자들`, scene: `개울을 건너는 외나무다리 한복판에 ${name} 제자 셋이 버티고 섰다. 비켜 줄 생각이 없어 보인다.`, line: '다리는 하나요, 길도 하나지. 먼저 온 쪽이 먼저 건너는 법 아니겠소? 돌아가시오.', dir: '다리 난간에 발을 올리며' },
+        { id: 'market', when: () => !friendly, title: `장터에서 마주친 ${name} 패거리`, scene: `${eatery} 앞에서 ${name} 제자들이 상인을 윽박지르다가 이쪽을 알아보았다.`, line: '거기 칼 찬 양반, 남의 일에 눈 돌리지 말고 가던 길이나 가시지. 아니면 같이 놀아 주든가.', dir: '상인의 멱살을 놓으며' },
+        { id: 'yard', when: () => !friendly, title: `${name}의 길가 연무장`, scene: `길가 공터에서 ${name} 제자들이 무리 지어 수련하고 있다. 그중 하나가 목검으로 길을 가로막는다.`, line: '우리 문파 연무장 앞을 지나려면 한 수 보여 주고 가는 게 이 근방 법도요.', dir: '목검 끝으로 땅을 그으며' },
+        { id: 'tea', when: () => friendly, title: `길에서 만난 ${name}의 벗들`, scene: `${name} 제자들이 먼저 알아보고 ${greet}. 사부님께 귀한 손님 이야기를 들었다며 길가 찻집으로 이끈다.`, line: `${s.sectName}의 어른을 길에서 뵙다니요! 차 한 잔 올리게 해 주십시오. 한 수 가르침도 청하고 싶습니다.`, dir: '반갑게 포권하며' },
+        { id: 'escort', when: () => friendly, title: `${name} 제자들의 길 안내`, scene: `${name} 제자 몇이 고개 너머까지 길을 안내하겠다며 따라나선다. 요즘 이 길에 도적이 들끓는다고 한다.`, line: '저희 사부님이 아시면 혼납니다. 이 고개만큼은 저희가 모시겠습니다.', dir: '앞장서며' },
+      ]);
+      const options = friendly
+        ? [
+            ...(v.id === 'escort'
+              ? [{ id: 'escort', label: '호의를 받아 함께 고개를 넘는다', hint: `이 구간의 매복을 피한다 · ${josa(name, '과와')}의 관계 +3` }]
+              : [{ id: 'drink', label: '차를 나누며 근황을 듣는다', hint: `통찰 +1 · ${josa(name, '과와')}의 관계 +6` }]),
+            { id: 'spar', label: '청을 받아 가볍게 한 수 겨뤄 준다', hint: '목검 시합 · 이기면 명성' },
+            { id: 'leave', label: '고맙다며 갈 길을 간다' },
+          ]
+        : [
+            { id: 'teach', label: '버릇을 가르친다', hint: `진검승부 · ${josa(name, '과와')}의 관계 악화` },
+            { id: 'bow', label: '웃으며 포권하고 지나간다', hint: `${josa(name, '과와')}의 관계 개선` },
+          ];
       return {
-        title: `${sect.name} 제자들의 시비`,
-        category: 'DUEL',
-        sceneActor: 'ENEMY',
-        narration: `주막 앞에서 ${sect.name} 제자들이 길을 막는다.`,
-        script: [
-          N(`주막 앞, ${sect.name}의 문양을 단 제자들이 길을 막는다.`),
-          P(`${sect.name} 대제자`, `${s.sectName}? 들어 본 적 없는 이름인데. 우리 사형께 인사라도 하고 지나가시지.`, '팔짱을 끼며', 'ANGRY'),
-        ],
-        options: [
-          { id: 'teach', label: '버릇을 가르친다', hint: `진검승부 · ${sect.name}과의 관계 악화` },
-          { id: 'bow', label: '웃으며 포권하고 지나간다', hint: `${sect.name}과의 관계 개선` },
-        ],
-        meta: { sectId: sect.id },
+        title: v.title,
+        category: friendly ? 'LIFE' : 'DUEL',
+        sceneActor: friendly ? 'RIVAL' : 'ENEMY',
+        narration: v.scene,
+        script: [N(v.scene), P(`${name} 대제자`, v.line, v.dir, friendly ? undefined : 'ANGRY')],
+        options,
+        meta: { sectId: sect.id, vkey: v.id, vkeys: [`s_${sect.id}`] },
       };
     },
     resolve: (s, opt, c) => {
       const sect = getSects(s).find((x) => x.id === c.data?.sectId) || metSects(s)[0];
       if (!sect) return s;
-      if (opt === 'teach') {
+      if (opt === 'leave') return s;
+      if (opt === 'teach' || opt === 'spar') {
         return journeyBattle(s, { ...c, data: { ...(c.data || {}), sectId: sect.id } }, opt, {
-          stakes: 'MERCY', title: `${sect.name} 대제자`,
-          subtitle: '길 위의 시비',
+          stakes: opt === 'spar' ? 'SPAR' : 'MERCY',
+          title: `${sect.name} 대제자`,
+          subtitle: opt === 'spar' ? '길 위의 한 수' : '길 위의 시비',
           name: `${sect.name} 대제자`,
           enemyTitle: sect.champion,
           age: 27,
@@ -359,14 +386,27 @@ export const PEOPLE_EVENTS: JourneyEventDef[] = [
           scale: roadScale(s, 0.9),
           weapon: 'BLADE',
           skills: ['base_h_slash', 'sk_kr_01', 'sk_cn_01'],
-          rewardFame: 20,
+          rewardFame: opt === 'spar' ? 10 : 20,
         });
       }
+      if (opt === 'drink') {
+        const n = adjustRelation(addStats(s, { ins: 1 }), sect.id, 6, `길에서 ${sect.name} 제자들과 차를 나누었다`);
+        return say(n, [['나레이션', `찻잔이 몇 번 돌자 그 문파의 요즘 사정이 다 들렸다. (통찰 +1, ${josa(sect.name, '과와')}의 관계 +6)`]]);
+      }
+      if (opt === 'escort') {
+        const n = adjustRelation(clearAmbushes(s), sect.id, 3, `${sect.name} 제자들의 안내로 고개를 넘었다`);
+        return say(n, [['나레이션', `제자들이 앞뒤로 서자 고갯길이 조용했다. 이 구간에서는 매복을 만나지 않을 것이다. (${josa(sect.name, '과와')}의 관계 +3)`]]);
+      }
       const n = adjustRelation(addRep(s, { virtue: 3 }), sect.id, 6, `길에서 ${sect.name} 제자들에게 먼저 예를 갖추었다`);
-      return say(n, [['나레이션', `웃으며 포권하자 대제자가 머쓱하게 길을 비켰다. (${sect.name}과의 관계 +6)`]]);
+      return say(n, [['나레이션', `웃으며 포권하자 대제자가 머쓱하게 길을 비켰다. (${josa(sect.name, '과와')}의 관계 +6)`]]);
     },
-    onBattle: (s, _opt, won, c) => {
+    onBattle: (s, opt, won, c) => {
       const sectId = c.data?.sectId as string | undefined;
+      if (opt === 'spar') {
+        return won
+          ? adjustRelation(addFame(s, 5), sectId, 3, '길에서 그 문파 제자들에게 한 수 가르쳐 주었다')
+          : adjustRelation(addStats(s, { ins: 1 }), sectId, 2, '길에서 그 문파 대제자와 겨루어 한 수 배웠다');
+      }
       if (won) return adjustRelation(addFame(s, 10), sectId, -12, '길에서 그 문파의 대제자를 꺾어 망신을 주었다');
       return adjustRelation(addFame(s, -10), sectId, -4, '길에서 그 문파 제자에게 지고 말았다');
     },

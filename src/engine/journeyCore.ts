@@ -367,6 +367,11 @@ export function clearAmbushes(s: GameState): GameState {
   return s.journey ? { ...s, journey: { ...s.journey, ambushAt: [] } } : s;
 }
 
+// ───────── 변주 고르기 — 같은 사건이라도 최근에 본 장면은 피한다 ─────────
+// 구현은 engine/fresh.ts (고정 사건을 만드는 events.ts도 쓰므로 의존성 없는 모듈로 뺐다). 쓰는 법은 그 파일의 설명.
+export { freshFactor, noteSeen, pickFresh, seenAt } from './fresh';
+export type { FreshVariant } from './fresh';
+
 // ───────── 대사 한 줄 만들기 ─────────
 export const N = (text: string): SceneDialogueLine => ({ speaker: '나레이션', role: 'NARRATOR', text });
 export const P = (speaker: string, text: string, stageDirection?: string, emote?: SceneDialogueLine['emote']): SceneDialogueLine => ({

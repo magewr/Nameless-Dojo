@@ -1202,10 +1202,17 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
 
   // 계열마다 마지막으로 일어난 턴도 남긴다 — 같은 계열이 너무 촘촘히 되풀이되지 않게 (events.ts · sectEvents.ts의 간격 표)
   const fixedLast = isJourneyEvent(event) ? state.flags.homeEventLast : { ...(state.flags.homeEventLast || {}), [`@${baseKey}`]: state.turn };
+  // 고정 사건의 변주(meta.vkey)도 언제 봤는지 적는다 — 같은 장면이 연달아 나오지 않게 (journeyCore.pickFresh)
+  const vkeys = isJourneyEvent(event)
+    ? []
+    : [...(event.meta?.vkey !== undefined ? [String(event.meta.vkey)] : []), ...(Array.isArray(event.meta?.vkeys) ? (event.meta.vkeys as unknown[]).map(String) : [])];
+  const eventSeen = vkeys.length
+    ? { ...(state.flags.eventSeen || {}), ...Object.fromEntries(vkeys.map((k) => [`${baseKey}:${k}`, state.turn])) }
+    : state.flags.eventSeen;
   let next: GameState = {
     ...state,
     activeEvent: null,
-    flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent, homeEventLast: fixedLast },
+    flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent, homeEventLast: fixedLast, eventSeen },
   };
   const cMeta = COUNTRIES[state.country];
   const diffCfg = getDifficultyConfig(state);
@@ -1433,15 +1440,16 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
 
     case 'fever_medicine': {
       const { cost, cureChance } = getFeverMedicineMeta(next);
+      const ailment = String(event.meta?.ailment || '겨울 열병');
       next.money = Math.max(0, next.money - cost);
       if (Math.random() < cureChance) {
         next.health = Math.min(100, next.health + 10);
-        return addLog(next, `귀한 탕약(-${cost}${cMeta.currency})이 잘 들어 겨울 열병을 털어 냈다! (건강 +10)`, 'GOOD');
+        return addLog(next, `귀한 탕약(-${cost}${cMeta.currency})이 잘 들어 ${josa(ailment, '을를')} 털어 냈다! (건강 +10)`, 'GOOD');
       }
       // 탕약 실패: 72% 차도 미미 / 28% 약성 충돌·고열 악화!
       if (Math.random() < 0.72) {
         next.health = Math.max(4, next.health - 10);
-        next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '겨울 열병 후유증', turnsRemaining: 2 }];
+        next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: `${ailment} 후유증`, turnsRemaining: 2 }];
         return addLog(next, `비싼 탕약(-${cost}${cMeta.currency})을 달여 마셨으나 열기가 쉽게 꺾이지 않았다… (건강 -10 · 후유증)`, 'WARN');
       }
       const severeLoss = diffId === 'HELL' ? 30 : diffId === 'HARD' ? 22 : 18;
@@ -1456,15 +1464,16 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     }
     case 'fever_endure': {
       const loss = next.age >= 55 ? 20 : 15;
+      const ailment = String(event.meta?.ailment || '겨울 열병');
       next.health = Math.max(0, next.health - loss);
       next.stats = { ...next.stats, qi: next.stats.qi + 3, wil: next.stats.wil + 2 };
-      next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '겨울 열병 후유증', turnsRemaining: 2 }];
+      next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: `${ailment} 후유증`, turnsRemaining: 2 }];
       if (next.health <= 0) {
         next.deathCause = '열병(치료 포기)';
         next.phase = 'ENDING';
-        return addLog(next, '열병을 내공으로 버텨 내려다 끝내 기력이 다해 쓰러졌다…', 'DANGER');
+        return addLog(next, `${josa(ailment, '을를')} 내공으로 버텨 내려다 끝내 기력이 다해 쓰러졌다…`, 'DANGER');
       }
-      return addLog(next, `열병을 내공으로 억눌렀으나 몸이 크게 축났다. (건강 -${loss}, 영력 +3)`, 'WARN');
+      return addLog(next, `${josa(ailment, '을를')} 내공으로 억눌렀으나 몸이 크게 축났다. (건강 -${loss}, 영력 +3)`, 'WARN');
     }
 
     case 'disc_ill_pay':
@@ -1508,7 +1517,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
         next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 8 };
         return addLog(next, `${dName}이(가) 끝내 병사했다… 남은 문하생들이 스승을 원망스러운 눈으로 바라본다.`, 'DANGER');
       }
-      return addLog(next, `${dName}이(가) 천운으로 스스로 열병을 이겨 냈으나 마음의 앙금이 남았다.`, 'WARN');
+      return addLog(next, `${dName}이(가) 천운으로 스스로 ${josa(String(event.meta?.illness || '열병'), '을를')} 이겨 냈으나 마음의 앙금이 남았다.`, 'WARN');
     }
 
     case 'disc_pass_honor': {
@@ -1578,8 +1587,10 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       return addLog(next, '문하생들의 갈등을 지혜롭게 중재해 도장이 한층 화목해졌다. (전원 충성도 +10)', 'GOOD');
     case 'quarrel_spar': {
       next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 6 };
+      // 다툰 두 사람이 자란다 (예전 세이브의 사건에는 두 사람 기록이 없다 — 그때는 맨 앞의 둘)
+      const pair = [event.meta?.aId, event.meta?.bId].filter(Boolean);
       next.disciples = next.disciples.map((d, idx) =>
-        !d.dead && idx < 2 ? { ...d, stats: { ...d.stats, str: d.stats.str + 3, agi: d.stats.agi + 3 } } : d
+        !d.dead && (pair.length ? pair.includes(d.id) : idx < 2) ? { ...d, stats: { ...d.stats, str: d.stats.str + 3, agi: d.stats.agi + 3 } } : d
       );
       return addLog(next, '공개 대련 끝에 두 문하생이 서로의 실력을 인정하며 크게 성장했다!', 'GOOD');
     }

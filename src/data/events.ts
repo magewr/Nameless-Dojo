@@ -24,6 +24,21 @@ import { pickDramaEvent } from './sectEvents';
 import { bestSect, getSects, metSects, sectTag, worstSect } from './sects';
 import { rollTemperament } from './temperament';
 import { buildBloodGrudgeEvent } from './battleDialogue';
+import {
+  assassinScene,
+  famineScene,
+  feverScene,
+  festivalScene,
+  graduationScene,
+  herbScene,
+  illnessScene,
+  inspirationScene,
+  pickSickDisciple,
+  quarrelScene,
+  revisitScene,
+  teaGuestScene,
+} from './eventVariants';
+import { freshFactor, pickFresh } from '../engine/fresh';
 
 function makeEnemySkill(templateId: string, level: number): Skill {
   const base = createBaseSkills().find((s) => s.id === templateId);
@@ -97,6 +112,7 @@ const FIXED_EVENT_GAP: Record<string, number> = {
   life_disciple_quarrel: 8,
   life_wandering_tea: 10,
   life_famine_tuition: 8,
+  family_proposal: 8, // 혼담을 거절했다면 적어도 두 해는 다음 혼담이 오지 않는다
   blood_grudge: 4,
   // 어려움·지옥의 재난은 위협으로 남기되, 같은 재난이 몇 계절 만에 다시 덮치는 반복은 막는다.
   disaster_nature: 6,
@@ -241,13 +257,47 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
 
   // 2. 파산(빚 200+ & 4턴 이상) 위기 이벤트
   if (state.debt >= 200 && state.debtTurns >= 4) {
+    // 빚을 못 갚는 한 몇 해마다 다시 오는 사건이라, 독촉하러 오는 꼴을 매번 다르게 (engine/fresh)
+    const owed = `${state.debt}${cMeta.currency}`;
+    const clerk = state.country === 'JAPAN' ? '마을 관리' : state.country === 'CHINA' ? '현청 서리' : '고을 아전';
+    const dun = pickFresh(state, 'debt_crisis', [
+      {
+        id: 'pawn',
+        title: '사채업자의 압류 통보',
+        narration: `눈덩이처럼 불어난 빚(${owed}) 때문에 전당포 사내들이 몽둥이와 진검을 차고 도장을 에워쌌다.`,
+        speaker: '전당포 두목',
+        dialogue: '“이제 말로 할 때는 지났다. 도장 집기를 팔아 갚든, 내 밑에서 해결사 노릇을 하든, 아니면 나랑 진검으로 끝장을 보든 골라!”',
+      },
+      {
+        id: 'ledger',
+        title: '장부를 든 빚쟁이',
+        narration: `장부를 옆구리에 낀 빚쟁이가 왈패 여럿을 거느리고 마당에 들어섰다. 장부에 적힌 빚은 ${owed}.`,
+        speaker: '빚쟁이',
+        dialogue: '“이자에 이자가 붙어 이만큼이오. 오늘은 빈손으로 못 돌아가오. 집기를 팔든, 내 밑에서 궂은일을 하든, 칼로 끝을 보든 고르시오.”',
+      },
+      {
+        id: 'seal',
+        title: '대문에 붙은 차압 딱지',
+        narration: `아침에 나가 보니 대문에 차압 딱지가 붙어 있었다. 오후가 되자 빚쟁이 패거리가 몽둥이를 들고 들이닥쳤다. 빚은 ${owed}.`,
+        speaker: '빚쟁이 두목',
+        dialogue: '“딱지 보셨지? 오늘 해 지기 전까지 결판을 내야겠소. 갚을 길은 당신이 고르시오.”',
+      },
+      {
+        id: 'clerk',
+        title: '아전을 앞세운 빚 독촉',
+        narration: `빚쟁이가 ${clerk}${state.country === 'KOREA' ? '을' : '를'} 앞세우고 왔다. ${clerk}${state.country === 'KOREA' ? '은' : '는'} 헛기침만 하고, 빚쟁이는 도장 현판을 손가락으로 가리킨다. 빚은 ${owed}.`,
+        speaker: '빚쟁이 두목',
+        dialogue: '“나리께서도 보고 계시오. 오늘 결판을 내지 않으면 저 현판부터 떼어 가겠소.”',
+      },
+    ]);
     return {
       id: 'debt_crisis',
-      title: '사채업자의 압류 통보',
+      title: dun.title,
       category: 'DEBT',
-      narration: `눈덩이처럼 불어난 빚(${state.debt}${cMeta.currency}) 때문에 전당포 사내들이 몽둥이와 진검을 차고 도장을 에워쌌다.`,
-      speaker: '전당포 두목',
-      dialogue: '“이제 말로 할 때는 지났다. 도장 집기를 팔아 갚든, 내 밑에서 해결사 노릇을 하든, 아니면 나랑 진검으로 끝장을 보든 골라!”',
+      narration: dun.narration,
+      speaker: dun.speaker,
+      dialogue: dun.dialogue,
+      meta: { vkey: dun.id },
       // 빚을 갚는 길이 해결사·진검결투뿐이면, 덕을 쌓아 온 도장주도 빚에 몰리는 순간 살인검으로 기울어 버린다.
       // 제자들이 품을 팔거나, 땅을 팔거나, 도장주가 직접 한 해 품을 파는 길을 나이와 상관없이 열어 둔다.
       options: [
@@ -574,19 +624,32 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   }
 
   // 5. 가족 & 후계자 갈등 클라이맥스 (주인공 성별에 맞는 이성 반려자 매칭 & 성별 맞춤 대사 + 여성 주인공 직접 출산 리얼리티!)
-  if (!state.spouse && state.age >= 24 && state.age <= 45 && state.season === 'SPRING' && Math.random() < 0.35) {
+  if (!state.spouse && state.age >= 24 && state.age <= 45 && state.season === 'SPRING' && !fixedGapCooling(state, 'family_proposal') && Math.random() < 0.35) {
     const wantGender = state.gender === 'FEMALE' ? 'MALE' : 'FEMALE';
     const matching = cMeta.spouses.filter((sp) => !sp.gender || sp.gender === wantGender);
     const poolSp = matching.length > 0 ? matching : cMeta.spouses;
-    const candidate = poolSp[Math.floor(Math.random() * poolSp.length)];
+    // 한 번 거절한 인연은 다시 찾아오지 않는다 (모두 거절했다면 처음부터 다시)
+    const unasked = poolSp.filter((sp) => freshFactor(state, `family_proposal:c_${sp.id}`) >= 1);
+    const fromPool = unasked.length > 0 ? unasked : poolSp;
+    const candidate = fromPool[Math.floor(Math.random() * fromPool.length)];
     const spouseIsMale = wantGender === 'MALE';
     const isBigDojo = state.facilities.yard >= 3 || state.fame >= 250;
+    const cn = candidate.name;
+    const co = `${candidate.occupation} ${cn}`;
+    // 어떻게 맺어진 인연인지도 매번 다르게 (engine/fresh)
+    const meet = pickFresh(state, 'family_proposal', [
+      { id: 'helper', title: `봄날의 인연 — ${cn}`, narration: `도장 일을 돕다 자주 마주치던 ${josa(co, '과와')} 깊은 정이 들었다. 따뜻한 봄바람 아래, 함께 평생을 걸어갈 인연이 다가온다.` },
+      { id: 'matchmaker', title: `중매쟁이가 가져온 혼담 — ${cn}`, narration: `고을 중매쟁이가 ${co}의 사주단자를 들고 왔다. 며칠 뒤, ${josa(cn, '이가')} 직접 도장 대문 앞에 섰다.` },
+      { id: 'blossom', title: `꽃놀이 길의 인연 — ${cn}`, narration: `꽃놀이 인파 속에서 몇 번이고 눈이 마주치던 ${josa(co, '이가')}, 꽃잎이 흩날리는 개울가에서 걸음을 멈추고 이쪽을 돌아본다.` },
+      { id: 'winter', title: `겨울을 함께 난 인연 — ${cn}`, narration: `지난겨울 수련 중 다친 몸을 말없이 돌봐 주던 ${josa(co, '이가')}, 눈이 녹자 조심스레 마음을 꺼낸다.` },
+      { id: 'market', title: `장날마다 마주치던 ${cn}`, narration: `장날마다 같은 자리에서 마주치던 ${josa(co, '과와')} 어느새 안부를 묻는 사이가 되었다. 오늘은 그쪽에서 먼저 말을 건넨다.` },
+    ]);
     return {
       id: 'family_proposal',
-      title: `봄날의 인연 — ${candidate.name}`,
+      title: meet.title,
       category: 'FAMILY',
       sceneActor: 'SPOUSE',
-      narration: `도장 일을 돕다 자주 마주치던 ${candidate.occupation} ${candidate.name}과(와) 깊은 정이 들었다. 따뜻한 봄바람 아래, 함께 평생을 걸어갈 인연이 다가온다.`,
+      narration: meet.narration,
       speaker: candidate.name,
       dialogue: spouseIsMale
         ? isBigDojo
@@ -596,16 +659,16 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
         ? `“훌륭한 도장주로서 묵묵히 제자들을 이끄는 모습을 오래 지켜봤어요. 괜찮다면…… 앞으로의 세월은 제 곁에서 함께 걸어가 주실래요?”`
         : '“비가 새던 마당에서 묵묵히 칼을 닦는 모습을 오래 지켜봤어요. 괜찮다면…… 앞으로의 세월은 제 곁에서 함께 걸어가 주실래요?”',
       options: [
-        { id: 'marry_yes', label: `${candidate.name}과(와) 혼례를 올린다`, hint: `배우자 보너스: ${candidate.bonusDesc}` },
+        { id: 'marry_yes', label: `${josa(candidate.name, '과와')} 혼례를 올린다`, hint: `배우자 보너스: ${candidate.bonusDesc}` },
         { id: 'marry_no', label: '“내 길은 아직 멀고 험하오…” 정중히 거절한다', hint: '독신 무인 유지 · 구도 +10' },
       ],
-      meta: { candidate },
+      meta: { candidate, vkey: meet.id, vkeys: [`c_${candidate.id}`] },
     };
   }
 
   // 아이를 낳는 쪽(여성 주인공 또는 아내)이 마흔다섯을 넘었다면 더는 아이 소식이 없다
   const bearerAge = state.gender === 'FEMALE' ? state.age : state.spouse?.age ?? 99;
-  if (state.spouse && state.spouse.alive && bearerAge <= 44 && !state.disciples.some((d) => d.isChild) && state.year >= state.spouse.marriedYear + 2 && Math.random() < 0.45) {
+  if (state.spouse && state.spouse.alive && bearerAge <= 44 && !state.disciples.some((d) => d.isChild && !d.adopted) && state.year >= state.spouse.marriedYear + 2 && Math.random() < 0.45) {
     const childName = cMeta.childNames[Math.floor(Math.random() * cMeta.childNames.length)];
     const heroIsFemale = state.gender === 'FEMALE';
     return {
@@ -643,10 +706,10 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   if (
     state.age >= 55 &&
     !state.flags.heirConflictDone &&
-    state.disciples.some((d) => d.isChild && !d.dead) &&
+    state.disciples.some((d) => d.isChild && !d.adopted && !d.dead) &&
     state.disciples.some((d) => !d.isChild && !d.dead)
   ) {
-    const child = state.disciples.find((d) => d.isChild && !d.dead)!;
+    const child = state.disciples.find((d) => d.isChild && !d.adopted && !d.dead)!;
     const topDisciple = [...state.disciples]
       .filter((d) => !d.isChild && !d.dead)
       .sort((a, b) => (b.stats.str + b.stats.ins + b.stats.qi) - (a.stats.str + a.stats.ins + a.stats.qi))[0];
@@ -658,8 +721,8 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       speaker: child.name,
       dialogue:
         child.childTalent === 'SCHOLAR'
-          ? `“아버지(어머니), 저는 칼보다 장부와 외교로 도장을 지키는 편이 맞습니다. ${topDisciple.name} 사형이 무술을 잇고 제가 살림을 맡으면 어떨까요?”`
-          : `“아버지(어머니), 제 몸에 흐르는 피와 평생 봐 온 이 마당을 남에게 넘길 수는 없습니다. 저에게 가보를 맡겨 주십시오!”`,
+          ? `“${parentTitleOf(state)}, 저는 칼보다 장부와 외교로 도장을 지키는 편이 맞습니다. ${topDisciple.name} 사형이 무술을 잇고 제가 살림을 맡으면 어떨까요?”`
+          : `“${parentTitleOf(state)}, 제 몸에 흐르는 피와 평생 봐 온 이 마당을 남에게 넘길 수는 없습니다. 저에게 가보를 맡겨 주십시오!”`,
       options: [
         { id: 'heir_pick_disciple', label: `수제자 ${topDisciple.name}을(를) 2대 종주로 지명한다`, hint: child.childTalent === 'SCHOLAR' ? '황금 화합 루트! (무력+재정 완벽 계승)' : '무력 최상 계승 · 친자녀와 갈등 가능' },
         { id: 'heir_pick_child', label: `친자녀 ${child.name}에게 도장과 가보를 물려준다`, hint: '혈통 세가 계승 (재능 부족 시 초식 열화 위험)' },
@@ -681,8 +744,9 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     const lostHeir = state.disciples.find((d) => d.role === 'HEIR' && d.dead);
     const bestOf = (list: typeof heirCandidates) =>
       [...list].sort((a, b) => (b.stats.str + b.stats.ins + b.stats.qi) - (a.stats.str + a.stats.ins + a.stats.qi))[0];
-    const topDisciple = bestOf(heirCandidates.filter((d) => !d.isChild));
-    const child = bestOf(heirCandidates.filter((d) => d.isChild));
+    // 거둔 아이는 핏줄이 아니라 문하생으로 겨룬다
+    const topDisciple = bestOf(heirCandidates.filter((d) => !d.isChild || d.adopted));
+    const child = bestOf(heirCandidates.filter((d) => d.isChild && !d.adopted));
     const speakerD = topDisciple || child;
     const options: GameEventOption[] = [];
     if (topDisciple) {
@@ -1229,13 +1293,15 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
 
   // 흉년 월사금 (최근 쿨다운 적용!)
   if (state.disciples.filter((d) => !d.dead).length >= 2 && !(state.flags.recentEventBases || []).includes('life_famine_tuition')) {
+    const famine = famineScene(state);
     pool.push({
       id: 'life_famine_tuition',
-      title: '흉년과 밀린 월사금',
+      title: famine.title,
       category: 'LIFE',
-      narration: '가뭄이 들어 농사꾼 집안 문하생들이 석 달째 월사금을 내지 못하고 고개를 숙인다.',
+      narration: famine.narration,
       speaker: '문하생 대표',
-      dialogue: '“사부님, 면목 없습니다. 가을 추수가 끝나면 꼭 갚겠습니다…”',
+      dialogue: state.season === 'AUTUMN' || state.season === 'WINTER' ? '“사부님, 면목 없습니다. 내년 농사가 되는 대로 꼭 갚겠습니다…”' : '“사부님, 면목 없습니다. 가을 추수가 끝나면 꼭 갚겠습니다…”',
+      meta: { vkey: famine.id },
       options: [
         { id: 'famine_forgive', label: '“돈 없으면 마당이나 쓸어라. 수련은 멈추지 마라.”', hint: '인덕 +18 · 제자 충성도 & 성장률 상승' },
         { id: 'famine_strict', label: '“도장도 유지해야 한다. 밀린 몫은 받아야겠다.”', hint: `재화 +35${cMeta.currency} · 상무 +12 · 충성도 소폭↓` },
@@ -1372,20 +1438,16 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       gradCandidate.stats.ins +
       gradCandidate.stats.qi;
     const isBitter = gradCandidate.loyalty < 55;
+    // 같은 하산이라도 매번 다른 장면 (eventVariants — 최근에 본 장면은 피한다)
+    const gradScene = graduationScene(state, gradCandidate, statSum >= 175, isBitter);
     return {
       id: `disciple_graduate_${gradCandidate.id}_${state.turn}`,
-      title: isBitter ? `제자의 하산 — 불만을 품은 ${gradCandidate.name}` : `제자의 독립(하산) — ${gradCandidate.name}`,
+      title: gradScene.title,
       category: 'LIFE',
       sceneActor: 'DISCIPLE',
-      narration: isBitter
-        ? `${gradCandidate.name}(${gradCandidate.age}세)이(가) 서늘한 표정으로 짐을 꾸려 마당에 섰다.`
-        : `어느덧 ${gradCandidate.age}세가 된 ${gradCandidate.name}이(가) 봇짐을 메고 스승 앞에 무릎을 꿇었다.`,
+      narration: gradScene.narration,
       speaker: gradCandidate.name,
-      dialogue: isBitter
-        ? '“이 도장에선 더 배울 게 없더군요. 이제 제 갈 길을 가겠습니다. ……다음에 만날 땐 스승과 제자가 아닐지도 모르지요.”'
-        : statSum >= 175
-        ? '“사부님의 가르침 덕분에 이제 천하에 나가 제 이름을 시험해 보고 싶습니다. 부디 하산을 허락해 주십시오!”'
-        : '“사부님, 그동안 감사했습니다. 이제 나이가 차서 고향과 저잣거리에서 제 살림을 꾸려 보고자 합니다.”',
+      dialogue: gradScene.dialogue,
       options: isBitter
         ? [
             { id: 'grad_let_go', label: '“네 뜻이 그렇다면 말리지 않겠다. 가거라.”', hint: `${gradCandidate.name} 하산 · 훗날 적으로 돌아올 위험!` },
@@ -1395,7 +1457,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
             { id: 'grad_bless', label: `“그래, 네 무도를 세상에 펼치고 오너라!” 격려하며 하산을 축복한다`, hint: `${gradCandidate.name} 독립 · 능력치에 따라 훗날 거물/잡인으로 재방문! · 명성 +15 · 인덕 +8` },
             { id: 'grad_keep', label: `“아직 도장에 네 손이 필요하다. 사범으로 남아 주지 않겠나?”`, hint: `사범으로 잔류 · 충성도 -12` },
           ],
-      meta: { discipleId: gradCandidate.id, statSum },
+      meta: { discipleId: gradCandidate.id, statSum, vkey: gradScene.id },
     };
   }
 
@@ -1433,52 +1495,54 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
         meta: { gradId: revisitTarget.id, gradName: revisitTarget.name, gradPower: revisitTarget.powerScore },
       };
     }
+    // 돌아온 제자의 장면도 매번 다르게 (eventVariants)
+    const visit = revisitScene(state, revisitTarget);
     if (revisitTarget.fate === 'GRANDMASTER') {
       return {
         id: `grad_revisit_master_${revisitTarget.id}_${state.turn}`,
-        title: `거물이 되어 돌아온 제자 — ${revisitTarget.name}`,
+        title: visit.title,
         category: 'LIFE',
         sceneActor: 'DISCIPLE',
-        narration: `화려한 행렬과 함께 찾아온 이는 도장을 하산해 천하에 명성을 떨치는 대고수가 된 옛 제자 ${revisitTarget.name}이었다!`,
+        narration: visit.narration,
         speaker: revisitTarget.name,
-        dialogue: `“사부님! 가르쳐 주신 「${revisitTarget.topSkillName}」 덕분에 큰 문파의 장문인이 되었습니다! 스승님 은혜에 보답하고자 선물을 준비했습니다!”`,
+        dialogue: visit.dialogue,
         options: [
           { id: 'grad_master_accept', label: '“장하구나! 네가 내 문하의 자랑이다.” 선물을 기쁘게 받는다', hint: `재화 +240 · 명성 +60 · 희귀 비급/명검 기증!` },
           { id: 'grad_master_spar', label: '“선물보다 네 칼이 얼마나 자랐는지 한 합 보자꾸나!”', hint: '친선 대련 · 통찰 +5 · 명성 +45 · 재화 +120' },
         ],
-        meta: { gradId: revisitTarget.id, gradName: revisitTarget.name },
+        meta: { gradId: revisitTarget.id, gradName: revisitTarget.name, vkey: visit.id },
       };
     }
     if (revisitTarget.fate === 'SUCCESSFUL') {
       return {
         id: `grad_revisit_success_${revisitTarget.id}_${state.turn}`,
-        title: `출세한 옛 제자의 방문 — ${revisitTarget.name}`,
+        title: visit.title,
         category: 'LIFE',
         sceneActor: 'DISCIPLE',
-        narration: `말끔한 비단옷을 차려입은 옛 제자 ${revisitTarget.name}이(가) 묵직한 은자 꾸러미를 들고 스승을 찾아왔다.`,
+        narration: visit.narration,
         speaker: revisitTarget.name,
-        dialogue: `“사부님, 잘 지내셨습니까! 저, 이제 고을 제일의 표국을 맡아 꽤 넉넉히 살고 있습니다. 도장 살림에 보태어 주십시오!”`,
+        dialogue: visit.dialogue,
         options: [
           { id: 'grad_success_money', label: '“고맙다, 잘 쓰마. 언제든 놀러 오너라.”', hint: `재화 +130 · 명성 +25 · 인덕 +6` },
           { id: 'grad_success_recruit', label: '“은자보다 네가 아는 쓸 만한 젊은이 하나 추천해 다오.”', hint: `우수 신입 문하생 입문 · 재화 +60` },
         ],
-        meta: { gradId: revisitTarget.id, gradName: revisitTarget.name },
+        meta: { gradId: revisitTarget.id, gradName: revisitTarget.name, vkey: visit.id },
       };
     }
     // ORDINARY (능력치가 낮아 평범한 일개 잡인으로 정착한 제자!)
     return {
       id: `grad_revisit_ordinary_${revisitTarget.id}_${state.turn}`,
-      title: `장터 백성이 된 옛 제자 — ${revisitTarget.name}`,
+      title: visit.title,
       category: 'LIFE',
       sceneActor: 'DISCIPLE',
-      narration: `소박한 무명옷 차림의 옛 제자 ${revisitTarget.name}이(가) 따뜻한 떡 보따리를 들고 쑥스럽게 대문 앞에 섰다.`,
+      narration: visit.narration,
       speaker: revisitTarget.name,
-      dialogue: `“사부님…… 죄송합니다. 제가 재주가 없어 고수는 못 되고 장터에서 국밥 장사하며 살고 있습니다. 그래도 도장에서 배운 체력 덕분에 험한 세상 잘 버팁니다!”`,
+      dialogue: visit.dialogue,
       options: [
         { id: 'grad_ordinary_warm', label: '“무슨 소리냐! 제 힘으로 밥 벌어먹고 살면 그게 제일 훌륭한 무도다.”', hint: '건강 +8 · 인덕 +15 · 문하생 전원 충성도↑' },
         { id: 'grad_ordinary_tip', label: '“잘 먹고 살아라.” 도장 홍보나 부탁하며 차를 대접한다', hint: '명성 +12 · 상무 +8' },
       ],
-      meta: { gradId: revisitTarget.id, gradName: revisitTarget.name },
+      meta: { gradId: revisitTarget.id, gradName: revisitTarget.name, vkey: visit.id },
     };
   }
 
@@ -1587,14 +1651,19 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
     // 적대 문파가 있으면 살수를 보낸 쪽이 드러나고, 믿을 만한 문파가 있으면 구원을 청할 수 있다.
     const assassinSender = worstSect(state, -50);
     const assassinAlly = bestSect(state, 50);
+    // 같은 야습이라도 들이닥치는 때와 꼴이 매번 다르다 (eventVariants와 같은 방식 — engine/fresh)
+    const ambush = pickFresh(state, 'realduel_assassin', [
+      { id: 'night', title: '⚔ 살수단의 야습 — 피할 수 없는 진검승부', narration: '한밤중 도장 마당을 시커먼 살기가 뒤덮었다.' },
+      { id: 'fire', title: '⚔ 불화살과 함께 온 살수', narration: '자정 무렵, 불화살 몇 대가 헛간 지붕에 꽂혔다. 문하생들이 불을 끄러 뛰어나간 사이, 텅 빈 마당 한가운데로' },
+      { id: 'rain', when: (st: GameState) => st.season !== 'WINTER', title: '⚔ 빗소리에 묻힌 발소리 — 살수의 습격', narration: '장대비가 쏟아지는 밤, 빗소리에 발소리를 묻은 그림자들이 담장을 넘었다. 처마 끝 등불 아래로' },
+      { id: 'guest', title: '⚔ 손님으로 위장한 살수', narration: '해 질 녘 하룻밤 묵어 가겠다던 길손이 삿갓을 벗어 던졌다. 소매 속에 감춘 칼날이 번뜩이고, 담장 너머로 패거리가 뛰어든다. 그 한가운데로' },
+    ]);
     return {
       id: `realduel_assassin_${state.turn}`,
-      title: '⚔ 살수단의 야습 — 피할 수 없는 진검승부',
+      title: ambush.title,
       category: 'DUEL',
       sceneActor: 'ENEMY',
-      narration: assassinSender
-        ? `한밤중 도장 마당을 시커먼 살기가 뒤덮었다. ${sectTag(assassinSender.name, '이가')} 은자를 풀어 보낸 살수 두목이 시퍼런 진검을 빼 들고 정면으로 걸어온다!`
-        : '한밤중 도장 마당을 시커먼 살기가 뒤덮었다. 경쟁 문파나 원한 품은 자가 보낸 살수 두목이 시퍼런 진검을 빼 들고 정면으로 걸어온다!',
+      narration: `${ambush.narration} ${assassinSender ? `${sectTag(assassinSender.name, '이가')} 은자를 풀어 보낸 살수 두목이` : '경쟁 문파나 원한 품은 자가 보낸 살수 두목이'} 시퍼런 진검을 빼 들고 정면으로 걸어온다!`,
       speaker: '피의 살수 두목',
       dialogue: `“【${state.sectName}】의 목에 현상금이 걸렸다. 오늘 밤 네 목을 따거나, 아니면 도장 금고를 통째로 털어 가겠다!”`,
       options: [
@@ -1629,7 +1698,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
           disabledReason: '재화 부족',
         },
       ],
-      meta: { bribeCost, sectId: assassinSender?.id, allyId: assassinAlly?.id },
+      meta: { bribeCost, sectId: assassinSender?.id, allyId: assassinAlly?.id, vkey: ambush.id },
     };
   }
 
@@ -1638,19 +1707,16 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   if (feverSeasonOk && !isCooling('hero_fever') && Math.random() < diffCfg.feverRate) {
     const fMeta = getFeverMedicineMeta(state);
     const curePct = Math.round(fMeta.cureChance * 100);
-    const isElder = state.age >= 55;
+    // 앓는 병도 매번 다르다 (eventVariants — 결과 문구는 meta.ailment를 쓴다)
+    const fever = feverScene(state);
     return {
       id: `hero_fever_${state.turn}`,
-      title: state.season === 'WINTER' ? '매서운 겨울의 열병(熱病)' : '지독한 환절기 악성 열병(熱病)',
+      title: fever.title,
       category: 'LIFE',
       sceneActor: state.spouse?.alive ? 'SPOUSE' : undefined, // 배우자가 없거나 먼저 떠났으면 의원이 말한다
-      narration: isElder
-        ? '매서운 바람이 세월을 먹은 뼈마디 깊숙이 스며든 탓일까. 밤새 오한과 고열이 번갈아 찾아오며 기력이 뚝 떨어졌다.'
-        : '찬 바람을 맞으며 수련을 강행한 탓일까. 온몸이 불덩이처럼 달아오르며 식은땀이 멈추지 않는다.',
+      narration: fever.narration,
       speaker: state.spouse?.alive ? state.spouse.name : '동네 의원',
-      dialogue: isElder
-        ? '“연세도 있으신데 폐에 찬 기운이 깊이 들었습니다! 당장 귀한 탕약을 쓰셔야 합니다만, 이번 열병은 독해 약효를 장담하기 어렵습니다!”'
-        : '“폐에 찬 기운이 깊이 들었습니다! 당장 탕약을 쓰고 쉬셔야 합니다만, 이번 열병은 독해 약이 꼭 듣는다는 보장도 없습니다!”',
+      dialogue: fever.dialogue,
       options: [
         {
           id: 'fever_medicine',
@@ -1659,25 +1725,28 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
           disabled: state.money < fMeta.cost,
           disabledReason: '재화 부족',
         },
-        { id: 'fever_endure', label: '“이깟 열병쯤 내공으로 눌러 버리겠다!” 꾹 버틴다', hint: `건강 -${state.age >= 55 ? 20 : 15} · 영력 +3 · 정신 +2 (위험!)` },
+        { id: 'fever_endure', label: `“이깟 ${fever.label}쯤 내공으로 눌러 버리겠다!” 꾹 버틴다`, hint: `건강 -${state.age >= 55 ? 20 : 15} · 영력 +3 · 정신 +2 (위험!)` },
       ],
+      meta: { vkey: fever.id, ailment: fever.label },
     };
   }
 
-  const sickDisc = state.disciples.find((d) => !d.dead && !d.isChild);
-  if (sickDisc && state.turn >= 6 && !isCooling('disciple_illness') && Math.random() < diffCfg.discipleIllnessRate) {
+  // 앓는 제자는 최근에 앓지 않은 제자 가운데서 (예전에는 언제나 맨 앞의 제자만 앓았다)
+  const sickDisc = !isCooling('disciple_illness') ? pickSickDisciple(state) : undefined;
+  if (sickDisc && state.turn >= 6 && Math.random() < diffCfg.discipleIllnessRate) {
+    const ill = illnessScene(state, sickDisc);
     const dMeta = getDiscipleIllnessMeta(state);
     const payPct = Math.round(dMeta.payCureChance * 100);
     const carePct = Math.round(dMeta.careCureChance * 100);
     const doctorAlly = bestSect(state, 40);
     return {
       id: `disciple_illness_${sickDisc.id}_${state.turn}`,
-      title: `문하생의 중병 — 쓰러진 ${sickDisc.name}`,
+      title: ill.title,
       category: 'LIFE',
       sceneActor: 'DISCIPLE',
-      narration: `한밤중 숙소에서 거친 기침 소리가 터져 나왔다. 문하생 ${sickDisc.name}(${sickDisc.age}세)이(가) 고열과 각혈로 쓰러져 있다!`,
+      narration: ill.narration,
       speaker: sickDisc.name,
-      dialogue: '“쿨럭…… 사부님, 죄송합니다…… 몸이 말을 듣지 않습니다……”',
+      dialogue: ill.dialogue,
       options: [
         {
           id: 'disc_ill_pay',
@@ -1698,7 +1767,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
         { id: 'disc_ill_care', label: '직접 내공을 불어넣어 밤새 간호한다', hint: `내 건강 -8 · ${carePct}% 완치 (실패 시 병사!) · 인덕 +10` },
         { id: 'disc_ill_leave', label: '“형편이 넉넉지 않다… 하늘의 뜻에 맡길 수밖에.”', hint: `⚠ 높은 확률로 ${sickDisc.name} 병사 · 남은 제자 충성도↓ · 살기 +8` },
       ],
-      meta: { discipleId: sickDisc.id, discipleName: sickDisc.name, allyId: doctorAlly?.id, cureChance: dMeta.payCureChance },
+      meta: { discipleId: sickDisc.id, discipleName: sickDisc.name, allyId: doctorAlly?.id, cureChance: dMeta.payCureChance, illness: ill.label, vkeys: [ill.id, `d_${sickDisc.id}`] },
     };
   }
 
@@ -1783,13 +1852,13 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   }
 
   if (!isCooling('random_inspiration')) {
+    const insp = inspirationScene(state);
     pool.push({
       id: `random_inspiration_${state.turn}`,
-      title: isElderHero ? '빗소리 속의 무심(無心)' : '빗소리 속의 번뜩임',
+      title: insp.title,
       category: 'LIFE',
-      narration: isElderHero
-        ? '처마 끝에서 떨어지는 빗방울 소리를 고요히 듣다, 평생 휘둘러 온 초식에서 불필요한 힘 하나가 스르르 빠져나가는 경지를 느꼈다.'
-        : '처마에서 떨어지는 빗방울 박자를 멍하니 듣다가, 문득 막혀 있던 초식의 맥이 머릿속에서 번개처럼 맞물린다.',
+      narration: insp.narration,
+      meta: { vkey: insp.id },
       options: [
         { id: 'insp_train', label: isElderHero ? '빗속 마당에 서서 천천히 초식의 결을 다듬는다' : '밤새 마당에서 휘두르며 깨달음을 몸에 새긴다', hint: '건강 -4 · 통찰 +3 · 주력 초식 경험치 대폭↑' },
         { id: 'insp_note', label: '붓으로 구상만 적어 두고 몸을 아낀다', hint: '통찰 +2 · 구도 +5' },
@@ -1799,15 +1868,16 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
 
   if (!isCooling('life_festival_demo')) {
     const heckler = Math.random() < 0.6 ? worstSect(state, -35) : null;
+    const fest = festivalScene(state);
     pool.push({
       id: `life_festival_demo_${state.turn}`,
-      title: '고을 장터 축제의 무예 시연',
+      title: fest.title,
       category: 'LIFE',
-      sceneActor: 'MERCHANT',
+      sceneActor: fest.merchant ? 'MERCHANT' : undefined,
       narration: heckler
-        ? `고을 큰 장날을 맞아 저잣거리 상인들이 도장에 무예 시연을 정중히 청해 왔다. 다만 ${sectTag(heckler.name)} 패거리가 구경꾼 사이에 섞여 훼방을 놓으려 벼른다는 말이 들린다.`
-        : '고을 큰 장날을 맞아 저잣거리 상인들이 도장에 무예 시연을 정중히 청해 왔다.',
-      speaker: '장터 상인 대표',
+        ? `${fest.narration} 다만 ${sectTag(heckler.name)} 패거리가 구경꾼 사이에 섞여 훼방을 놓으려 벼른다는 말이 들린다.`
+        : fest.narration,
+      speaker: fest.speaker,
       dialogue: isElderHero
         ? `“큰 스승님, 직접 칼을 휘두르지 않으셔도 좋으니 문하생들과 함께 축제의 큰 어른으로 자리만 빛내 주십시오!”`
         : winsCount >= 1 || state.fame >= 350
@@ -1826,7 +1896,7 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
             ]
           : []),
       ],
-      meta: { sectId: heckler?.id },
+      meta: { sectId: heckler?.id, vkey: fest.id },
     });
   }
 
@@ -1838,18 +1908,20 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
       : isMidHero
       ? '“허허, 도장주 양반 안색을 보니 중년의 피로와 속병이 꽤 쌓였구먼. 백년 묵은 산약초 한 뿌리 달여 드시겠소? 다만 약성이 강해 간혹 탈이 날 수도 있소.”'
       : '“허허, 젊은 무인 양반 안색을 보니 수련하느라 기력이 꽤 축났구먼. 백년 묵은 산약초 한 뿌리 달여 드시겠소? 다만 약성이 강해 간혹 탈이 날 수도 있소.”';
+    const herb = herbScene(state);
     pool.push({
       id: `life_herb_peddler_${state.turn}`,
-      title: '깊은 산속 약초꾼의 귀한 영약',
+      title: herb.title,
       category: 'LIFE',
       sceneActor: 'MERCHANT',
-      narration: '흙 묻은 배낭을 멘 늙은 약초꾼이 산삼과 진귀한 약재를 싸 들고 도장 마당을 찾았다.',
-      speaker: '산속 약초꾼',
-      dialogue: herbDialogue,
+      narration: herb.narration,
+      speaker: herb.speaker,
+      dialogue: herbDialogue.replace('백년 묵은 산약초 한 뿌리', `귀한 ${herb.item}`).replace('노년에 좋은 백년 산약초 한 뿌리', `노년에 좋은 ${herb.item}`),
+      meta: { vkey: herb.id },
       options: [
         {
           id: 'herb_buy',
-          label: `산약초를 사서 푹 달여 마신다 (-${hMeta.cost}${cMeta.currency})`,
+          label: `${josa(herb.item, '을를')} 사서 푹 달여 마신다 (-${hMeta.cost}${cMeta.currency})`,
           hint: `성공 ${hPct}% (건강 +18 · 체력/영력 +2) · 실패 시 불량 약재 복통(건강 -6)`,
           disabled: state.money < hMeta.cost,
           disabledReason: '재화 부족',
@@ -1860,12 +1932,14 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   }
 
   if (!isCooling('life_night_assassin') && state.fame >= 65) {
+    const sneak = assassinScene(state);
     pool.push({
       id: `life_night_assassin_${state.turn}`,
-      title: '달밤의 낯선 자객',
+      title: sneak.title,
       category: 'DUEL',
       sceneActor: 'ENEMY',
-      narration: '그믐달 아래, 담장을 소리 없이 넘어온 검은 복면의 자객이 도장 장서각을 노리고 숨어들었다!',
+      narration: sneak.narration,
+      meta: { vkey: sneak.id },
       speaker: '검은 복면 자객',
       dialogue:
         winsCount >= 1 || isElderHero
@@ -1879,17 +1953,20 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
   }
 
   if (!isCooling('life_disciple_quarrel') && state.disciples.filter((d) => !d.dead).length >= 2) {
-    const aliveList = state.disciples.filter((d) => !d.dead);
+    // 다투는 두 사람도 매번 다르다 (예전에는 늘 맨 앞의 두 제자였다)
+    const aliveList = [...state.disciples.filter((d) => !d.dead)].sort(() => Math.random() - 0.5);
     const d1 = aliveList[0];
     const d2 = aliveList[1];
+    const fight = quarrelScene(state, d1.name, d2.name);
     pool.push({
       id: `life_disciple_quarrel_${state.turn}`,
-      title: '문하생 간의 대련 신경전',
+      title: fight.title,
       category: 'LIFE',
       sceneActor: 'DISCIPLE',
-      narration: `수련 도중 ${d1.name}과(와) ${d2.name}의 기세가 과열되어 멱살잡이 직전까지 치달았다!`,
+      narration: fight.narration,
       speaker: d1.name,
-      dialogue: `“사부님! ${d2.name}이(가) 제 초식을 우습게 보고 멋대로 힘으로만 밀어붙입니다!”`,
+      dialogue: fight.dialogue,
+      meta: { vkey: fight.id, aId: d1.id, bId: d2.id },
       options: [
         { id: 'quarrel_mediate', label: '두 사람의 장단점을 차분히 짚어 화해시킨다', hint: '전 문하생 충성도 +10 · 인덕 +8 · 통찰 +2' },
         { id: 'quarrel_spar', label: '“말 대신 목검으로 끝장을 보거라!” 공개 대련을 붙인다', hint: '두 제자 스탯 대폭 상승 · 살기 +6' },
@@ -1899,16 +1976,18 @@ export function pickSeasonalEvent(state: GameState): ActiveEvent | null {
 
   if (!isCooling('life_wandering_tea')) {
     const isGreatMaster = isElderHero || winsCount >= 1;
+    const guest = teaGuestScene(state);
     pool.push({
       id: `life_wandering_tea_${state.turn}`,
-      title: '비 오는 날 낯선 검객과의 차담',
+      title: guest.title,
       category: 'LIFE',
       sceneActor: 'RIVAL',
-      narration: '장대비를 피해 처마 밑에 들어선 낯선 중년 검객이 도장의 목인장을 보며 감탄한다.',
-      speaker: '지나가던 중년 검객',
+      narration: guest.narration,
+      speaker: guest.speaker,
       dialogue: isGreatMaster
         ? `“아이고, 설마 천하에 이름난 【${state.sectName}】의 큰 스승님이십니까! 비를 피하다 귀한 인연을 만났으니, 차 한 잔 올리며 검리의 가르침을 청해도 되겠습니까?”`
-        : '“목인장에 패인 칼자국이 참으로 곧고 깊구려. 비가 그칠 동안 차 한 잔 나누며 검리를 이야기해 보시겠소?”',
+        : guest.plain,
+      meta: { vkey: guest.id },
       options: [
         { id: 'tea_discuss', label: isGreatMaster ? '차를 권하며 후배 검객과 깊은 검리를 나눈다' : '밤늦도록 서로의 검리와 호흡법을 논한다', hint: '통찰 +3 · 정신 +2 · 주력 초식 숙련도↑ · 구도 +8' },
         { id: 'tea_spar', label: '“말보다 한 합 부딪쳐 보는 편이 빠르지요!” 가벼운 친선 비무', hint: '친선 대련 · 승리 시 명성 +28 · 초식 숙련↑' },
@@ -1951,6 +2030,9 @@ function makeExtraDiscipleName(state: GameState, used: Set<string>): string {
   return `문하생 ${state.disciples.length + 1}`;
 }
 
+// 자녀가 부모를 부르는 말 (주인공의 성별)
+const parentTitleOf = (state: GameState) => (state.gender === 'FEMALE' ? '어머니' : '아버지');
+
 export function createDiscipleEntity(
   state: GameState,
   opts?: {
@@ -1958,6 +2040,7 @@ export function createDiscipleEntity(
     archetype?: string;
     isGenius?: boolean;
     isChild?: boolean;
+    adopted?: boolean; // 거둔 아이(길가의 아이·동네 아이·전란의 고아) — 아이로 자라지만 친자녀로 치지 않는다
     childTalent?: Disciple['childTalent'];
     temperament?: Disciple['temperament']; // 사연이 정해진 입문자(첫 제자, 은혜를 입은 자 등)는 기질을 지정한다
   }
@@ -1976,6 +2059,7 @@ export function createDiscipleEntity(
   const archetypes = ['우직한 농부 아들', '몰락 무사', '장터 고아', '서당 학동', '부두 인부', '명문가 자제', '방랑 낭인'];
   const archetype = opts?.archetype || archetypes[Math.floor(Math.random() * archetypes.length)];
   const isGenius = opts?.isGenius ?? Math.random() < (state.facilities.dorm >= 3 ? 0.28 : 0.14);
+  const ownChild = !!opts?.isChild && !opts?.adopted;
   const baseStat = isGenius ? 24 : 15;
   const elements: Disciple['talentElement'][] = ['PHYSICAL', 'WIND', 'QI', 'FIRE', 'ICE', 'LIGHTNING'];
   const weapons: WeaponGroup[] = ['BLADE', 'UNARMED', 'POLEARM', 'THROWN'];
@@ -1983,9 +2067,10 @@ export function createDiscipleEntity(
   return {
     id: `disc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
     name,
-    archetype: opts?.isChild ? '친자녀' : archetype,
+    archetype: ownChild ? '친자녀' : archetype,
     age: opts?.isChild ? 10 : 15 + Math.floor(Math.random() * 9),
     isChild: opts?.isChild,
+    ...(opts?.isChild && opts?.adopted ? { adopted: true } : {}),
     childTalent: opts?.childTalent,
     isGenius,
     talentElement: elements[Math.floor(Math.random() * elements.length)],
@@ -2006,6 +2091,6 @@ export function createDiscipleEntity(
     tuition: opts?.isChild ? 0 : archetype === '명문가 자제' ? 22 : 10,
     ...(opts?.temperament
       ? { temperament: opts.temperament, temperamentKnown: true }
-      : rollTemperament(getDifficultyId(state), opts?.isChild ? '친자녀' : archetype, { isChild: opts?.isChild, isGenius })),
+      : rollTemperament(getDifficultyId(state), ownChild ? '친자녀' : archetype, { isChild: opts?.isChild, isGenius })),
   };
 }

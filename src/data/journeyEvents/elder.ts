@@ -28,7 +28,7 @@ import { josa } from '../../utils/korean';
 // ───────── 공용 도구 ─────────
 export const aliveDisc = (s: GameState) => s.disciples.filter((d) => !d.dead && !d.isChild);
 export const heirOf = (s: GameState): Disciple | undefined => s.disciples.find((d) => !d.dead && d.role === 'HEIR');
-export const kinOf = (s: GameState) => s.disciples.filter((d) => !d.dead && d.isChild);
+export const kinOf = (s: GameState) => s.disciples.filter((d) => !d.dead && d.isChild && !d.adopted); // 거둔 아이는 핏줄로 치지 않는다
 export const mem = (s: GameState, key: string): string | undefined => s.flags.storyMemory?.[key];
 export const memTurn = (s: GameState, key: string): number => {
   const v = Number(mem(s, key));
@@ -970,7 +970,7 @@ function guestsOf(s: GameState): string[] {
   if (s.spouse?.alive) g.push(`${spouseWord(s)} ${s.spouse.name}`);
   kinOf(s).forEach((k) => g.push(k.name));
   const h = heirOf(s);
-  if (h && !h.isChild) g.push(`후계자 ${h.name}`);
+  if (h && !(h.isChild && !h.adopted)) g.push(`후계자 ${h.name}`);
   (s.graduatedDisciples || [])
     .filter((x) => x.fate === 'GRANDMASTER' || x.fate === 'SUCCESSFUL')
     .slice(0, 2)

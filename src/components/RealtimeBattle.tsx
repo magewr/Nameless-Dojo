@@ -1047,7 +1047,7 @@ export const RealtimeBattle: React.FC<Props> = ({ state, battle, onFinish }) => 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-36 overflow-y-auto">
                   {aliveDisciples.map((d) => (
                     <button key={d.id} onClick={() => startFight('DISCIPLE', d.id)} className="rpg-btn text-left p-2 text-xs cursor-pointer">
-                      <div className="font-bold text-[#fde68a]">{d.name} {d.isChild ? '(자녀)' : ''} · {d.age}세</div>
+                      <div className="font-bold text-[#fde68a]">{d.name} {d.isChild ? (d.adopted ? '(거둔 아이)' : '(자녀)') : ''} · {d.age}세</div>
                       <div className="text-[11px] text-[#d6cbb8]">STR {d.stats.str} / AGI {d.stats.agi} / 초식 {d.skills.length}</div>
                     </button>
                   ))}

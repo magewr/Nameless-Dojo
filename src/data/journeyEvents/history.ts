@@ -35,7 +35,7 @@ const hasRoom = (s: GameState) => s.disciples.filter((d) => !d.dead).length < ge
 
 function orphan(s: GameState, archetype: string): { state: GameState; name: string | null } {
   if (!hasRoom(s)) return { state: s, name: null };
-  const d = { ...createDiscipleEntity(s, { isGenius: chance(0.5), isChild: true, childTalent: 'DILIGENT', archetype, temperament: 'DILIGENT' }), joinedYear: s.year, temperamentKnown: true };
+  const d = { ...createDiscipleEntity(s, { isGenius: chance(0.5), isChild: true, adopted: true, childTalent: 'DILIGENT', archetype, temperament: 'DILIGENT' }), joinedYear: s.year, temperamentKnown: true };
   return { state: { ...s, disciples: [...s.disciples, d], flags: { ...s.flags, hasHadFirstDisciple: true } }, name: d.name };
 }
 

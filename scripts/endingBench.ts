@@ -3,6 +3,7 @@
 //   RUNS=120 npm run test:ending
 //   PERSONA=RUTHLESS            한 성향만
 //   RUTH=1                      성향별 살기 출처 상위 항목
+//   SRC=virtue                  RUTH와 같되 다른 세평 축 (virtue·ascetic·commerce·arcane·ruthless) — 무사수행은 사건별로 나눠 센다
 //   DUMP=/tmp/x.json            일생별 세평을 JSON으로 (lineageFacts의 축 기회값을 다시 잡을 때)
 // 목표: ① 무작위로 고르는 플레이어의 엔딩이 한두 가지에 쏠리지 않는다.
 //       ② 한 세평 축을 의식해 고르는 플레이어는 그 축의 엔딩을 받는다 (플레이 방향이 엔딩에 반영된다).
@@ -49,6 +50,7 @@ const ONLY = process.env.PERSONA as Persona | undefined;
 
 const rand = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
 const ruthSrc = new Map<string, number>();
+const SRC_AXIS = ((process.env.SRC || 'ruthless') as keyof GameState['reputation']);
 const isFantasy = (origin: string[]) => origin.includes('FANTASY');
 
 // 선택지 고르기: 추구하는 축의 세평이 오르는 선택지를 85% 확률로, 아니면 무작위(위험 표시는 피한다).
@@ -98,8 +100,8 @@ function runLife(persona: Persona, idx: number): LifeResult {
   let lastOfferTurn = -1;
   let safety = 0;
 
-  const track = (label: string, before: GameState) => {
-    const d = st.reputation.ruthless - before.reputation.ruthless;
+  const track = (label: string, before: GameState, after: GameState = st) => {
+    const d = after.reputation[SRC_AXIS] - before.reputation[SRC_AXIS];
     if (d > 0) ruthSrc.set(`${persona}|${label}`, (ruthSrc.get(`${persona}|${label}`) || 0) + d);
   };
   const handleEvents = () => {
@@ -186,8 +188,12 @@ function runLife(persona: Persona, idx: number): LifeResult {
     // 두 해에 한 번꼴 무사수행
     if (st.turn >= 6 && st.turn % 8 === 5 && st.health >= 60 && st.statuses.length === 0 && st.money >= 40 && st.age < 70) {
       const jb = st;
+      // 길 위의 세평은 사건별로 나눠 센다 (다음 사건을 고를 때, 또는 수행이 끝날 때 앞 사건 몫을 정산)
+      let jPrev: { label: string; s: GameState } | null = null;
       st = runJourneyHeadless(st, rand(regionsForCountry(st.country)).id, {
-        choose: (_s, ev) => {
+        choose: (s0, ev) => {
+          if (jPrev) track(jPrev.label, jPrev.s, s0);
+          jPrev = { label: `길:${String(ev.meta?.jrKey || ev.id)}`, s: s0 };
           const opts = ev.options.filter((o) => !o.disabled && o.id !== 'home');
           if (persona !== 'RANDOM') {
             const w = AXIS_WORD[persona];
@@ -200,7 +206,8 @@ function runLife(persona: Persona, idx: number): LifeResult {
         },
         fight: (s) => fight(s),
       });
-      track('무사수행', jb);
+      if (jPrev) track((jPrev as { label: string; s: GameState }).label, (jPrev as { label: string; s: GameState }).s, st);
+      void jb;
       if (st.phase === 'ENDING') break;
       st = advanceSeason({ ...st, lastSeasonSummary: null });
       st = withMilestones(turnStart, st) || st;
@@ -295,10 +302,10 @@ for (const persona of PERSONAS) {
   );
   console.log(`    세평 중앙/90%: 인덕 ${repQ('virtue')} · 살기 ${repQ('ruthless')} · 상무 ${repQ('commerce')} · 구도 ${repQ('ascetic')} · 이단 ${repQ('arcane')}`);
 }
-if (process.env.RUTH) {
+if (process.env.RUTH || process.env.SRC) {
   for (const persona of PERSONAS) {
-    const rows = [...ruthSrc.entries()].filter(([k]) => k.startsWith(persona + '|')).sort((a, b) => b[1] - a[1]).slice(0, 8);
-    if (rows.length) console.log(`  살기 출처 [${persona}] ${rows.map(([k, v]) => `${k.split('|')[1]} ${Math.round(v / RUNS)}`).join(' · ')}`);
+    const rows = [...ruthSrc.entries()].filter(([k]) => k.startsWith(persona + '|')).sort((a, b) => b[1] - a[1]).slice(0, process.env.SRC ? 16 : 8);
+    if (rows.length) console.log(`  ${SRC_AXIS} 출처 [${persona}] ${rows.map(([k, v]) => `${k.split('|')[1]} ${Math.round(v / RUNS)}`).join(' · ')}`);
   }
 }
 if (allLives) {

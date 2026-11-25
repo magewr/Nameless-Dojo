@@ -28,6 +28,8 @@ import { aliveDisc, callName, heirOf, magistrate, mapDisc, mem, memTurn, milesto
 // 노년(55세 이후)의 사건 ② 물려주기 · 원로의 자리 · 남길 것 · 저물어 가는 시대.
 // 칼을 쥔 사람에서 칼을 넘겨주는 사람으로 — 양위한 뒤에는 도장 일을 후계자가 맡고, 나는 지켜보거나 조언하거나 끼어든다.
 
+// 핏줄(친자녀)인가 — 거둔 아이는 문하생으로 친다
+const isBlood = (d: { isChild?: boolean; adopted?: boolean }) => !!d.isChild && !d.adopted;
 const hasRoom = (s: GameState) => s.disciples.filter((d) => !d.dead).length < getMaxDisciples(s.facilities);
 const isRetired = (s: GameState) => {
   const a = s.flags.abdicated;
@@ -338,7 +340,7 @@ const secret: JourneyEventDef = {
   once: true,
   weight: 1.5,
   trigger: { age: [63, 99] },
-  cond: (s) => !!heirOf(s) && !heirOf(s)!.isChild && s.skills.some((k) => !k.isPassive && k.masteryLevel >= 7),
+  cond: (s) => !!heirOf(s) && !isBlood(heirOf(s)!) && s.skills.some((k) => !k.isPassive && k.masteryLevel >= 7),
   build: (s) => {
     const h = heirOf(s)!;
     const sk = [...s.skills].filter((k) => !k.isPassive).sort((a, b) => b.masteryLevel - a.masteryLevel || b.power - a.power)[0];
@@ -387,7 +389,7 @@ const swordHandover: JourneyEventDef = {
   elder: true,
   once: true,
   trigger: { age: [68, 99] },
-  cond: (s) => !!heirOf(s) && !heirOf(s)!.isChild && s.weapons.length >= 2,
+  cond: (s) => !!heirOf(s) && !isBlood(heirOf(s)!) && s.weapons.length >= 2,
   build: (s) => {
     const h = heirOf(s)!;
     const w = [...s.weapons].sort((a, b) => (b.winsCount || 0) - (a.winsCount || 0))[0];
@@ -757,7 +759,7 @@ const youngChallenger: JourneyEventDef = {
       options: [
         { id: 'fight', label: mem(s, 'cane') === 'YES' ? '지팡이를 내려놓고 목검을 든다' : '천천히 일어나 목검을 든다', hint: '비무 · 늙은 몸으로 — 소문을 듣고 온 만만치 않은 상대' },
         { id: 'words', label: '마루에 앉은 채 한마디로 기를 꺾는다', hint: `정신·통찰 시험 ${pct(words)}` },
-        ...(h && !h.isChild ? [{ id: 'heir', label: `「내 칼은 ${h.name}에게 있다」 — 후계자를 내보낸다`, hint: '후계자가 자란다' }] : []),
+        ...(h && !isBlood(h) ? [{ id: 'heir', label: `「내 칼은 ${h.name}에게 있다」 — 후계자를 내보낸다`, hint: '후계자가 자란다' }] : []),
       ],
       meta: { k: ch.k, name, age: ch.age, words, home },
     };

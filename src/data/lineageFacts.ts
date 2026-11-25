@@ -89,12 +89,18 @@ export interface LineageFacts {
 //   지금 값에서: 무작위 플레이어 인덕 28% · 구도 24% · 상무 14% · 살기 17% · 이계 17%,
 //   한 축을 노린 플레이어는 인덕 91% · 구도 86% · 상무 100% · 이계 86% · 살기 68%가 그 축의 엔딩을 받는다.
 //   이벤트 보상이나 수련·호위의 세평 몫을 손보면 `npm run test:ending`으로 다시 확인한다.
+//
+// 2026-11 사건 다양화 뒤 재보정: 길 위 사건 19종·중년기 도장 사건 17종이 들어오며 남을 돕는(인덕) 선택지가 크게 늘었다.
+//   그대로 두면 무작위 플레이어의 43%가 인덕으로 끝나서, 새 사건에 살기 20곳·이단 14곳의 선택지를 보태고 큰 인덕 보상을 줄인 뒤
+//   기회값을 구도 0.75→0.7 · 살기 0.17→0.15 · 이계 0.45→0.4로 낮췄다 (DUMP로 일생별 세평을 뽑아 격자 탐색).
+//   지금 값에서: 무작위 플레이어 인덕 22% · 구도 27% · 상무 14% · 살기 17% · 이계 20%,
+//   한 축을 노린 플레이어는 인덕 91% · 구도 93% · 상무 100% · 살기 92% · 이계 88%가 그 축의 엔딩을 받는다.
 const AXIS_ORDER: Array<{ axis: ChronicleAxis; key: keyof ReputationAxes; opportunity: number }> = [
   { axis: 'VIRTUE', key: 'virtue', opportunity: 1 },
-  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.75 },
+  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.7 },
   { axis: 'COMMERCE', key: 'commerce', opportunity: 0.6 },
-  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.17 },
-  { axis: 'ARCANE', key: 'arcane', opportunity: 0.45 },
+  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.15 },
+  { axis: 'ARCANE', key: 'arcane', opportunity: 0.4 },
 ];
 // 보조 축으로 인정하는 최소 원점수. 한두 번의 선택으로 "겸비"가 붙지 않게 한다.
 const SECOND_AXIS_MIN_RAW = 30;
@@ -220,7 +226,7 @@ export function extractLineageFacts(state: GameState): LineageFacts {
     succession,
     isOneTrick,
 
-    heir: heirD ? { name: heirD.name, isChild: !!heirD.isChild } : null,
+    heir: heirD ? { name: heirD.name, isChild: !!heirD.isChild && !heirD.adopted } : null,
     aliveDiscipleCount: alive.length,
     firstDiscipleName: firstDisciple?.name || null,
 

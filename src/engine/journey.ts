@@ -20,6 +20,7 @@ import {
   rumorsFor,
 } from '../data/journeyRegions';
 import { addFame, addHealth, highlight, JCtx, JourneyEventDef, isDone, markDone, triggerMet } from './journeyCore';
+import { noteSeen } from './fresh';
 import { getDifficultyId } from '../data/difficulty';
 import { BattleOutcomePayload, REAL_DUEL_RUTHLESS } from './gameLogic';
 import { SceneDialogueLine } from '../types/game';
@@ -63,6 +64,19 @@ function weighted<T>(items: Array<[T, number]>): T | null {
   return items[items.length - 1][0];
 }
 
+// 앞선 무사수행들에서 만난 장소 사건일수록 덜 놓는다. 한 생에 스무 번 떠나도 길마다 새 얼굴을 만나게.
+// 주막·사찰은 쉼터라 덜 깎는다 — 대신 들를 때마다 장면이 바뀐다 (common.ts의 변주).
+function roadFresh(s: GameState, def: JourneyEventDef): number {
+  const seen = s.flags.eventSeen || {};
+  const lastJ = seen[`road:${def.key}`];
+  if (lastJ === undefined) return 1;
+  const ago = (s.flags.journeyCount || 0) - lastJ; // 0 = 이번 수행, 1 = 바로 앞 수행
+  const count = seen[`road#${def.key}`] || 0;
+  if (def.kind === 'INN' || def.kind === 'SHRINE') return (ago <= 0 ? 0.5 : 1) / (1 + 0.05 * count);
+  const byAgo = ago <= 0 ? 0.1 : ago === 1 ? 0.12 : ago === 2 ? 0.3 : ago === 3 ? 0.55 : 0.85;
+  return byAgo / (1 + 0.15 * count);
+}
+
 // 이 구간에 놓일 장소들. 시대 사건은 가중치를 크게 주어 그 해의 공기가 길 위에 드러나게 한다.
 function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Pick<JourneyState, 'pois' | 'usedKeys'> | JourneyState | null): JourneyPoi[] {
   const used = new Set<string>([...(journey?.pois || []).map((p) => p.eventKey), ...(journey?.usedKeys || [])]);
@@ -87,13 +101,19 @@ function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Pic
       (Object.entries(leg.pois) as Array<[JourneyPoiKind, number]>).map(([k, w]) => [k, k === 'HISTORY' ? w * 1.6 : w])
     );
     if (!kind || kind === 'VISTA') continue;
+    // 쉼터(주막·사찰)는 한 구간에 하나씩이면 족하다 — 빈자리는 사람과 사연이 채운다
+    if ((kind === 'INN' || kind === 'SHRINE') && out.some((o) => o.kind === kind)) continue;
     const day = journey && 'day' in journey ? Number((journey as JourneyState).day) : 0;
     const pool = ALL_JOURNEY_EVENTS.filter((d) => d.kind === kind && eligible(d, s, r, used, leg, day) && !out.some((o) => o.key === d.key && d.once !== false));
     // 이 지역·연도에 맞는 시대 사건이 없으면 사람 사이의 인연으로 대신한다.
     const fallback = kind === 'HISTORY' || kind === 'MASTER' ? ALL_JOURNEY_EVENTS.filter((d) => d.kind === 'PEOPLE' && eligible(d, s, r, used, leg, day)) : [];
     // 시기가 정해진 사건(연도·특정 시기)은 그때가 아니면 볼 수 없으니 더 자주 놓는다
     const timed = (d: JourneyEventDef) => (d.years || d.trigger?.periods || d.trigger?.yearCycle ? 2.5 : d.trigger?.seasons ? 1.6 : 1);
-    const pick = weighted((pool.length ? pool : fallback).map((d) => [d, (d.weight ?? 1) * timed(d) * (d.weightBy ? d.weightBy(s, r) : 1)]));
+    const cands = pool.length ? pool : fallback;
+    // 이 종류의 사건을 모두 최근에 만났다면, 자리를 다른 종류에 넘길 기회를 준다
+    const freshest = cands.reduce((m, d) => Math.max(m, roadFresh(s, d)), 0);
+    if (freshest < 0.3 && guard < 24 && Math.random() < 0.75) continue;
+    const pick = weighted(cands.map((d) => [d, (d.weight ?? 1) * timed(d) * (d.weightBy ? d.weightBy(s, r) : 1) * roadFresh(s, d)]));
     if (!pick) continue;
     out.push({ kind: pick.kind as JourneyPoiKind, key: pick.key });
     used.add(pick.key);
@@ -278,6 +298,19 @@ export function resolveJourneyEvent(s: GameState, ev: ActiveEvent, optionId: str
   const poiId = String(ev.meta?.poiId || '') || undefined;
   const ctx: JCtx = { key, poiId, region: currentRegion(s), data: (ev.meta || {}) as Record<string, string | number> };
   let next = def.resolve({ ...s, pendingNotice: null }, optionId, ctx);
+  // 본 장면을 적어 둔다 — 고른 선택지와 상관없이, 플레이어는 이 장면을 이미 읽었다.
+  //  변주(vkey): 같은 틀 안의 같은 장면이 연달아 나오지 않게 / 길 위 장소: 바로 앞선 수행들에서 만난 사건은 덜 놓이게
+  {
+    const seen: Record<string, number> = {};
+    const vkey = ev.meta?.vkey;
+    if (vkey !== undefined && vkey !== '') seen[`${key}:${String(vkey)}`] = s.turn;
+    if (Array.isArray(ev.meta?.vkeys)) (ev.meta.vkeys as unknown[]).forEach((k) => (seen[`${key}:${String(k)}`] = s.turn));
+    if (s.journey && def.kind !== 'HOME' && def.kind !== 'ECHO_HOME') {
+      seen[`road:${key}`] = s.flags.journeyCount || 0;
+      seen[`road#${key}`] = (s.flags.eventSeen?.[`road#${key}`] || 0) + 1;
+    }
+    next = noteSeen(next, seen);
+  }
   if (optionId !== 'leave') {
     if (poiId && next.journey) {
       next = { ...next, journey: { ...next.journey, pois: next.journey.pois.map((p) => (p.id === poiId ? { ...p, done: true } : p)) } };
@@ -288,9 +321,10 @@ export function resolveJourneyEvent(s: GameState, ev: ActiveEvent, optionId: str
   }
   if (def.kind === 'HOME') {
     // 노년(55+)에 같은 생성형 틀이 몇 번 나왔는지도 센다 (#키) — 노년에는 같은 틀을 두 번까지만
+    // 일생 동안 같은 틀이 몇 번 나왔는지(%키) — 자주 나온 틀일수록 덜 뽑히고 더 오래 쉰다
     const hl = next.flags.homeEventLast || {};
     const elderCount = s.age >= 55 && !def.elder ? { [`#${key}`]: (hl[`#${key}`] || 0) + 1 } : {};
-    next = { ...next, flags: { ...next.flags, homeEventLast: { ...hl, [key]: s.turn, ...elderCount } } };
+    next = { ...next, flags: { ...next.flags, homeEventLast: { ...hl, [key]: s.turn, [`%${key}`]: (hl[`%${key}`] || 0) + 1, ...elderCount } } };
     // 생성형 사건은 자주 오므로 명성 보상을 덜어 낸다 (고정된 큰 사건보다 무겁지 않게)
     const gained = next.fame - s.fame;
     if (gained > 0) next = { ...next, fame: s.fame + Math.round(gained * HOME_FAME_MULT) };
@@ -304,6 +338,10 @@ const HOME_COOLDOWN = 6;
 // 노년(55+)에 같은 도장 생성형 틀(도전장·의뢰·병기상…)이 나올 수 있는 횟수 — 그 자리는 노년의 사건이 채운다
 const ELDER_GENERIC_CAP = 2;
 const HOME_FAME_MULT = 0.65;
+// 일생 동안 자주 나온 틀일수록 덜 뽑히고(가중치 ÷(1+0.35×횟수)) 더 오래 쉰다(쉬는 계절 ×(1+0.25×횟수)).
+// 한 틀이 네 번째쯤부터는 아직 덜 본 다른 틀에 자리를 내준다.
+const USE_WEIGHT_DECAY = 0.35;
+const USE_COOLDOWN_GROWTH = 0.25;
 
 function homePool(s: GameState, elder: boolean): Array<[JourneyEventDef, number]> {
   const last = s.flags.homeEventLast || {};
@@ -315,10 +353,13 @@ function homePool(s: GameState, elder: boolean): Array<[JourneyEventDef, number]
       (elder || s.age < 55 || (last[`#${d.key}`] || 0) < ELDER_GENERIC_CAP) &&
       !(d.once && isDone(s, d.key)) &&
       (!d.countries || d.countries.includes(s.country)) &&
-      (last[d.key] === undefined || s.turn - last[d.key] >= (d.cooldown ?? HOME_COOLDOWN) * (elder ? 1 : s.age >= 65 ? 2.5 : s.age >= 55 ? 1.75 : 1)) &&
+      (last[d.key] === undefined ||
+        s.turn - last[d.key] >= (d.cooldown ?? HOME_COOLDOWN) * (elder ? 1 : s.age >= 65 ? 2.5 : s.age >= 55 ? 1.75 : 1) * (1 + USE_COOLDOWN_GROWTH * (last[`%${d.key}`] || 0))) &&
       triggerMet(d.trigger, s, null, 0) &&
       (!d.cond || d.cond(s, region))
-  ).map((d) => [d, (d.weight ?? 1) * (d.weightBy ? d.weightBy(s, region) : 1)] as [JourneyEventDef, number]).filter(([, w]) => w > 0);
+  )
+    .map((d) => [d, ((d.weight ?? 1) * (d.weightBy ? d.weightBy(s, region) : 1)) / (1 + USE_WEIGHT_DECAY * (last[`%${d.key}`] || 0))] as [JourneyEventDef, number])
+    .filter(([, w]) => w > 0);
 }
 
 export function pickHomeEvent(s: GameState): ActiveEvent | null {
