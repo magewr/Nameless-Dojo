@@ -4,7 +4,22 @@ import { getLeg, getRegion } from '../data/journeyRegions';
 import { findPath, getJourneyMap, JourneyMap, TILE_INFO, tileAt, tileDays, walkable, zoneLegAt } from '../data/journeyMap';
 import { atEntrance, poiHere } from '../engine/journey';
 import { COUNTRIES, SEASON_META } from '../data/worldAndEndings';
-import { drawEntranceSprite, drawFieldHero, drawPoiAlert, drawPoiSprite, paintFieldFog, paintFieldGround, paintFieldObjects, TILE_PX } from '../pixel/journeyMapPainter';
+import {
+  CLOUD_TILE,
+  drawEntranceSprite,
+  drawFieldHero,
+  drawPoiAlert,
+  drawPoiSprite,
+  fieldSmokeSources,
+  paintCloudShadows,
+  paintFieldFog,
+  paintFieldGround,
+  paintFieldObjects,
+  paintedMapSources,
+  paintPaintedVeil,
+  TILE_PX,
+} from '../pixel/journeyMapPainter';
+import { loadRawImage } from '../pixel/spriteLoader';
 import { PixelPortrait } from './PixelPortrait';
 import { sound } from '../engine/sound';
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Coins, Footprints, Heart, Home, Map as MapIcon, MapPin, Search, Star } from 'lucide-react';
@@ -34,6 +49,30 @@ interface Particle {
   r: number;
 }
 
+interface Bird {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ph: number;
+}
+
+interface Flutter {
+  ax: number; // 맴도는 자리 (월드 도트)
+  ay: number;
+  ph: number;
+  col: string;
+}
+
+// 계절마다 빛의 빛깔 — 화면 전체에 soft-light로 얹는다. glow는 왼쪽 위에서 드는 햇살.
+const GRADE: Record<string, { tint: string; glow: string; shadow: number; clouds: number }> = {
+  SPRING: { tint: 'rgba(255,210,190,0.34)', glow: 'rgba(255,238,205,0.20)', shadow: 0.24, clouds: 0.13 },
+  SUMMER: { tint: 'rgba(255,232,160,0.26)', glow: 'rgba(255,250,214,0.16)', shadow: 0.28, clouds: 0.15 },
+  AUTUMN: { tint: 'rgba(255,168,82,0.38)', glow: 'rgba(255,206,130,0.22)', shadow: 0.26, clouds: 0.12 },
+  WINTER: { tint: 'rgba(150,178,232,0.36)', glow: 'rgba(222,236,255,0.12)', shadow: 0.2, clouds: 0.09 },
+};
+const COUNTRY_TAG: Record<string, string> = { KOREA: 'kr', CHINA: 'cn', JAPAN: 'jp' };
+
 export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, onStep, onInteract, onFinish }) => {
   const j = state.journey!;
   const region = getRegion(j.regionId);
@@ -56,7 +95,10 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
   const pathRef = useRef<Array<{ x: number; y: number }>>([]); // 지도를 눌러 정한 목적지까지의 걸음
   const walkTickRef = useRef(0);
   const zoomRef = useRef(0);
+  const baseZoomRef = useRef(0);
   const particlesRef = useRef<Particle[]>([]);
+  const birdsRef = useRef<Bird[]>([]);
+  const fluttersRef = useRef<Flutter[]>([]);
   const camRef = useRef({ x: 0, y: 0, z: 3 });
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
@@ -93,10 +135,52 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
 
   // 땅과 서 있는 것들 — 지역·계절이 바뀔 때만 다시 그린다
   const terrain = useMemo(() => paintFieldGround(map, state.country, state.season), [map, state.country, state.season]);
-  const objectRows = useMemo(() => paintFieldObjects(map, state.country, state.season), [map, state.country, state.season]);
+  const fieldObjects = useMemo(() => paintFieldObjects(map, state.country, state.season), [map, state.country, state.season]);
+  const objectRows = fieldObjects.rows;
+  const clouds = useMemo(() => paintCloudShadows(map.seed), [map]);
+  const smoke = useMemo(() => fieldSmokeSources(map), [map]);
   // 안개 — 아직 발을 들이지 않은 땅
   const visitedKey = j.visitedLegs.join('|');
-  const fog = useMemo(() => paintFieldFog(map, new Set(j.visitedLegs)), [map, visitedKey]);
+  const fog = useMemo(() => paintFieldFog(map, new Set(j.visitedLegs), state.season), [map, visitedKey, state.season]);
+  // 지역 지도를 통째로 그린 그림 — 계절 그림이 없으면 기본 그림, 그것도 없으면 코드로 그린 땅
+  const [painted, setPainted] = useState<{ img: HTMLImageElement; seasonal: boolean } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setPainted(null);
+    const src = paintedMapSources(j.regionId, state.season);
+    const tryLoad = (list: Array<[string, boolean]>) => {
+      if (!list.length) return;
+      const img = new Image();
+      img.onload = () => alive && img.naturalWidth > 0 && setPainted({ img, seasonal: list[0][1] });
+      img.onerror = () => alive && tryLoad(list.slice(1));
+      img.src = list[0][0];
+    };
+    tryLoad(
+      state.season === 'SPRING'
+        ? [[src.base, true]]
+        : [
+            [src.seasonal, true],
+            [src.base, false],
+          ]
+    );
+    return () => {
+      alive = false;
+    };
+  }, [j.regionId, state.season]);
+  const veil = useMemo(
+    () => (painted ? paintPaintedVeil(painted.img, map, new Set(j.visitedLegs), state.season) : null),
+    [painted, map, visitedKey, state.season]
+  );
+  // 지도 바깥에 깔리는 그림 (없으면 어두운 바탕)
+  const backdropSrc = `/assets/px_jr_field_backdrop_${COUNTRY_TAG[region.country] || 'kr'}.jpg`;
+  // 무사수행 첫날에는 지역 표제를 잠깐 띄운다
+  const [titleCard, setTitleCard] = useState(() => j.day < 0.5);
+  const [titleImgOk, setTitleImgOk] = useState(true);
+  useEffect(() => {
+    if (!titleCard) return;
+    const t = setTimeout(() => setTitleCard(false), 3200);
+    return () => clearTimeout(t);
+  }, [titleCard]);
 
   // ───────── 입력 ─────────
   const interactHere = () => {
@@ -204,9 +288,18 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
     const worldW = map.w * T;
     const worldH = map.h * T;
     // 도트 하나 = 화면 픽셀 정수 배. 휴대폰 2배, 보통 화면 3배, 큰 화면 4배.
-    const baseZoom = Math.max(2, Math.min(4, Math.round(Math.min(W / (18 * T), H / (11 * T)))));
+    let baseZoom = Math.max(2, Math.min(4, Math.round(Math.min(W / (18 * T), H / (11 * T)))));
+    if (painted) {
+      // 그림 지도는 그림의 화소 하나가 화면 화소 정수 배가 되게 (큰 화면에서는 두 배)
+      const img = painted.img;
+      const s = img.naturalWidth / worldW;
+      const f = W >= img.naturalWidth * 1.9 && H >= img.naturalHeight * 1.9 ? 2 : 1;
+      baseZoom = (Math.max(1, Math.round(view.dpr * f)) / view.dpr) * s;
+    }
     const fitZoom = Math.min(W / worldW, H / worldH);
-    if (!zoomRef.current) zoomRef.current = baseZoom;
+    // 그림이 들어오거나 빠져 배율 기준이 바뀌면 그 배율로 곧장 옮긴다
+    if (!zoomRef.current || baseZoomRef.current !== baseZoom) zoomRef.current = baseZoom;
+    baseZoomRef.current = baseZoom;
 
     const loop = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
@@ -277,12 +370,49 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
       camRef.current = { x: camX, y: camY, z };
 
       const k = view.dpr * z;
+      const grade = GRADE[st.season] || GRADE.SPRING;
+      // 지도 바깥 — 그림이 있으면 그림, 없으면 어둑한 바탕
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = '#0e0a14';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (worldW * z < W - 1 || worldH * z < H - 1) {
+        const bd = loadRawImage(backdropSrc);
+        if (bd) {
+          const sc = Math.max(canvas.width / bd.naturalWidth, canvas.height / bd.naturalHeight);
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(bd, (canvas.width - bd.naturalWidth * sc) / 2, (canvas.height - bd.naturalHeight * sc) / 2, bd.naturalWidth * sc, bd.naturalHeight * sc);
+          ctx.fillStyle = 'rgba(14,10,20,0.35)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+      }
       ctx.setTransform(k, 0, 0, k, -camX * k, -camY * k);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(terrain, 0, 0);
+      // 지도 판의 그림자와 테두리 (지도가 화면보다 작을 때만 보인다)
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(3, 5, worldW, worldH);
+      ctx.fillStyle = '#2a1d14';
+      ctx.fillRect(-2, -2, worldW + 4, worldH + 4);
+      ctx.fillStyle = '#8c6239';
+      ctx.fillRect(-1, -1, worldW + 2, worldH + 2);
+      if (painted) {
+        ctx.drawImage(painted.img, 0, 0, worldW, worldH);
+        // 계절 그림이 없으면 기본 그림에 계절을 입힌다 — 겨울은 빛을 빼고 희게
+        if (!painted.seasonal && st.season === 'WINTER') {
+          ctx.globalCompositeOperation = 'saturation';
+          ctx.fillStyle = 'rgba(128,128,128,0.5)';
+          ctx.fillRect(0, 0, worldW, worldH);
+          ctx.globalCompositeOperation = 'screen';
+          ctx.fillStyle = 'rgba(176,192,226,0.3)';
+          ctx.fillRect(0, 0, worldW, worldH);
+          ctx.globalCompositeOperation = 'source-over';
+        }
+      } else {
+        ctx.drawImage(terrain, 0, 0);
+        // 서 있는 것들의 그림자
+        ctx.globalAlpha = grade.shadow;
+        ctx.drawImage(fieldObjects.shadow, 0, 0);
+        ctx.globalAlpha = 1;
+      }
 
       // 물 반짝임 — 두 프레임으로 깜박이는 도트
       const x0 = Math.max(0, Math.floor(camX / T));
@@ -291,7 +421,7 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
       const y1 = Math.min(map.h - 1, Math.ceil((camY + vh) / T));
       const wf = Math.floor(now / 420);
       ctx.fillStyle = 'rgba(235,248,255,0.85)';
-      for (let y = y0; y <= y1; y++) {
+      for (let y = y0; y <= (painted ? -1 : y1); y++) {
         for (let x = x0; x <= x1; x++) {
           const tk = map.tiles[y * map.w + x];
           if (tk !== 'WATER' && tk !== 'SEA') continue;
@@ -322,15 +452,124 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
       const rowTo = Math.min(map.h - 1, y1 + 3);
       for (let r = rowFrom; r <= rowTo; r++) {
         const row = objectRows[r];
-        if (row?.canvas) ctx.drawImage(row.canvas, 0, row.y);
+        if (row?.canvas && !painted) ctx.drawImage(row.canvas, 0, row.y);
         if (r === map.entrance.y) drawEntranceSprite(ctx, map.entrance.x * T + T / 2, map.entrance.y * T + T, 1);
         (poisByRow.get(r) || []).forEach((p) => drawPoiSprite(ctx, p.kind, p.tx * T + T / 2, p.ty * T + T, 1, st.country, !!p.done, now));
         if (r === heroRow) drawHero(1);
       }
       // 나무 뒤에 선 주인공은 비쳐 보이게 (이미 보이는 자리에는 같은 그림이 겹칠 뿐이다)
-      drawHero(0.45);
+      if (!painted) drawHero(0.45);
 
-      ctx.drawImage(fog, 0, 0);
+      const secs = now / 1000;
+      // 굴뚝 연기 — 바람에 오른쪽으로 쏠리며 흩어진다
+      if (!painted) smoke.forEach((sm) => {
+        if (sm.x < camX - 20 || sm.x > camX + vw + 20 || sm.y < camY - 30 || sm.y > camY + vh + 30) return;
+        for (let i = 0; i < 4; i++) {
+          const ph = (secs * 0.32 + sm.ph + i / 4) % 1;
+          const sz = ph < 0.25 ? 1 : ph < 0.6 ? 2 : 3;
+          ctx.fillStyle = `rgba(236,240,246,${((1 - ph) * 0.6).toFixed(3)})`;
+          ctx.fillRect(Math.round(sm.x + Math.sin(ph * 5 + sm.ph * 6) * 1.5 + ph * 6 - sz / 2), Math.round(sm.y - ph * 20), sz, sz);
+        }
+      });
+
+      // 나비 (봄·여름) — 주인공 둘레 풀밭을 맴돈다
+      const fl = fluttersRef.current;
+      if (st.season === 'SPRING' || st.season === 'SUMMER') {
+        for (let i = fl.length - 1; i >= 0; i--) {
+          const f = fl[i];
+          if (f.ax < camX - 40 || f.ax > camX + vw + 40 || f.ay < camY - 40 || f.ay > camY + vh + 40) fl.splice(i, 1);
+        }
+        let tries = 0;
+        while (fl.length < 6 && tries++ < 12) {
+          const tx = Math.floor((camX + Math.random() * vw) / T);
+          const ty = Math.floor((camY + Math.random() * vh) / T);
+          const tk = tileAt(map, tx, ty);
+          if (tk !== 'PLAIN' && tk !== 'HILL' && tk !== 'FIELD') continue;
+          const cols = st.season === 'SPRING' ? ['#fff4f8', '#ffe066', '#ffb8d8'] : ['#ffffff', '#ffd040', '#9ad0ff'];
+          fl.push({ ax: tx * T + 8, ay: ty * T + 6, ph: Math.random() * 20, col: cols[Math.floor(Math.random() * cols.length)] });
+        }
+        fl.forEach((f) => {
+          const t2 = secs * 0.9 + f.ph;
+          const bx = Math.round(f.ax + Math.sin(t2) * 10 + Math.sin(t2 * 2.3) * 4);
+          const by = Math.round(f.ay + Math.cos(t2 * 0.8) * 6 + Math.sin(t2 * 3.1) * 2);
+          const open = Math.floor(now / 110 + f.ph * 7) % 2 === 0;
+          ctx.fillStyle = 'rgba(18,30,44,0.22)';
+          ctx.fillRect(bx, by + 6, 2, 1);
+          ctx.fillStyle = f.col;
+          if (open) {
+            ctx.fillRect(bx - 1, by, 1, 1);
+            ctx.fillRect(bx + 1, by, 1, 1);
+          } else ctx.fillRect(bx, by - 1, 1, 2);
+          ctx.fillStyle = '#3a2a22';
+          ctx.fillRect(bx, by, 1, 1);
+        });
+      } else fl.length = 0;
+
+      // 구름 그림자 — 천천히 흘러간다
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, worldW, worldH);
+      ctx.clip();
+      ctx.globalAlpha = grade.clouds;
+      const cox = (secs * 5) % CLOUD_TILE;
+      const coy = (secs * 2) % CLOUD_TILE;
+      for (let cy = Math.floor((camY - coy) / CLOUD_TILE); cy * CLOUD_TILE + coy < camY + vh; cy++) {
+        for (let cx = Math.floor((camX - cox) / CLOUD_TILE); cx * CLOUD_TILE + cox < camX + vw; cx++) {
+          ctx.drawImage(clouds, cx * CLOUD_TILE + cox, cy * CLOUD_TILE + coy);
+        }
+      }
+      ctx.restore();
+
+      // 새 떼 — 이따금 지도를 가로질러 날아가고, 땅에 그림자가 진다
+      const birds = birdsRef.current;
+      if (birds.length === 0 && Math.random() < dt * 0.1) {
+        const fromLeft = Math.random() < 0.5;
+        const n = 3 + Math.floor(Math.random() * 3);
+        const sx = fromLeft ? camX - 20 : camX + vw + 20;
+        const sy = camY + vh * (0.2 + Math.random() * 0.5);
+        const vx = (fromLeft ? 1 : -1) * (34 + Math.random() * 12);
+        const vy = (Math.random() - 0.5) * 8;
+        for (let i = 0; i < n; i++) {
+          const rank = Math.ceil(i / 2) * (i % 2 ? 1 : -1);
+          birds.push({ x: sx - Math.sign(vx) * Math.abs(rank) * 7, y: sy + rank * 5, vx, vy, ph: Math.random() * 3 });
+        }
+      }
+      for (let i = birds.length - 1; i >= 0; i--) {
+        const b = birds[i];
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.x < camX - 60 || b.x > camX + vw + 60) birds.splice(i, 1);
+      }
+      birds.forEach((b) => {
+        const bx = Math.round(b.x);
+        const by = Math.round(b.y);
+        ctx.fillStyle = 'rgba(18,30,44,0.22)';
+        ctx.fillRect(bx - 2 + 10, by + 34, 5, 1);
+        ctx.fillStyle = st.season === 'WINTER' ? '#1e1a22' : '#2e2a36';
+        const up = Math.floor(now / 140 + b.ph) % 2 === 0;
+        ctx.fillRect(bx, by, 1, 1);
+        if (up) {
+          ctx.fillRect(bx - 1, by - 1, 1, 1);
+          ctx.fillRect(bx + 1, by - 1, 1, 1);
+          ctx.fillRect(bx - 2, by - 2, 1, 1);
+          ctx.fillRect(bx + 2, by - 2, 1, 1);
+        } else {
+          ctx.fillRect(bx - 2, by, 2, 1);
+          ctx.fillRect(bx + 1, by, 2, 1);
+          ctx.fillRect(bx - 3, by + 1, 1, 1);
+          ctx.fillRect(bx + 3, by + 1, 1, 1);
+        }
+      });
+
+      if (painted && veil) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(veil, 0, 0, worldW, worldH);
+        ctx.imageSmoothingEnabled = false;
+      } else {
+        ctx.globalAlpha = 0.92;
+        ctx.drawImage(fog, 0, 0);
+        ctx.globalAlpha = 1;
+      }
 
       // 아직 들르지 않은 장소의 「!」
       js.pois.forEach((p) => {
@@ -356,8 +595,23 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
         ctx.fillRect(hv.x * T, hv.y * T, T, T);
       }
 
-      // ── 날씨 (화면 위, 도트 크기로) ──
+      // ── 빛 — 계절의 빛깔과 왼쪽 위에서 드는 햇살 ──
       ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+      ctx.globalCompositeOperation = 'soft-light';
+      // 계절 그림은 이미 그 계절의 빛으로 그려져 있으니 엷게만
+      ctx.globalAlpha = painted?.seasonal ? 0.35 : painted ? 0.7 : 1;
+      ctx.fillStyle = grade.tint;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'screen';
+      const sun = ctx.createRadialGradient(W * 0.12, -H * 0.1, 0, W * 0.12, -H * 0.1, Math.max(W, H) * 0.9);
+      sun.addColorStop(0, grade.glow);
+      sun.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = sun;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ── 날씨 (화면 위, 도트 크기로) ──
       const q = Math.max(2, Math.round(z));
       const ps = particlesRef.current;
       const want = st.season === 'WINTER' ? 90 : st.season === 'SUMMER' ? 60 : st.season === 'AUTUMN' ? 30 : 36;
@@ -398,11 +652,18 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
         }
       });
 
+      // 가장자리를 어둡게 — 시선이 가운데로 모인다
+      const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.42, W / 2, H / 2, Math.hypot(W, H) * 0.62);
+      vg.addColorStop(0, 'rgba(12,8,24,0)');
+      vg.addColorStop(1, 'rgba(12,8,24,0.42)');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
+
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [view, terrain, objectRows, fog, map]);
+  }, [view, terrain, fieldObjects, fog, map, clouds, smoke, backdropSrc, painted, veil]);
 
   const dayInt = Math.floor(j.day);
   const dayPct = Math.min(100, (j.day / j.maxDays) * 100);
@@ -511,6 +772,30 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
           className="absolute inset-0 cursor-pointer"
           style={{ width: view.w, height: view.h, imageRendering: 'pixelated' }}
         />
+
+        {/* 지역 표제 — 무사수행 첫날 */}
+        {titleCard && !hasOverlay && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center p-4 animate-region-title cursor-pointer" onClick={() => setTitleCard(false)}>
+            <div className="relative w-full max-w-xl overflow-hidden border-2 border-[#8c6239] bg-[#140d09]/85 shadow-[0_8px_30px_rgba(0,0,0,0.6)]">
+              {titleImgOk && (
+                <img
+                  src={`/assets/px_jr_region_${region.id.toLowerCase()}.jpg`}
+                  alt=""
+                  className="block w-full aspect-[16/9] object-cover"
+                  style={{ imageRendering: 'pixelated' }}
+                  onError={() => setTitleImgOk(false)}
+                />
+              )}
+              <div className={`${titleImgOk ? 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent pt-10' : ''} px-4 py-3 text-center`}>
+                <div className="text-[10px] tracking-[0.4em] text-[#c9974c]">무사수행 {state.flags.journeyCount || 1}번째 · {SEASON_META[state.season].label}</div>
+                <div className="mt-1 text-2xl sm:text-3xl font-bold text-[#fde68a] drop-shadow-[0_2px_0_#000]">
+                  {region.name} <span className="text-lg sm:text-xl text-[#e6d8be]">{region.hanja}</span>
+                </div>
+                <div className="mt-1 text-[11px] text-[#c7b394]">{leg.name}에서 길을 나선다</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 풍문 */}
         {j.lastRumor && !hasOverlay && !mapMode && (

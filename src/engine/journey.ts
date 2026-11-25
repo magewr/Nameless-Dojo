@@ -159,6 +159,23 @@ export function startJourney(s: GameState, regionId?: JourneyRegionId): GameStat
   return addLog(next, `무사수행을 떠났다 — ${r.name}(${r.hanja}). ${r.blurb}`, 'GOOD');
 }
 
+// 그 칸이 집·물·벼랑이면 출발점에서 닿는 가장 가까운 걸을 칸으로 비킨다 (그림에 맞춘 칸 배치에선 구역 한가운데가 막혀 있기도 하다).
+function standableNear(m: ReturnType<typeof getJourneyMap>, x: number, y: number): { x: number; y: number } {
+  const ok = (cx: number, cy: number) => {
+    const t = tileAt(m, cx, cy);
+    return !!t && TILE_INFO[t].pass && !!m.reach[cy * m.w + cx];
+  };
+  if (ok(x, y)) return { x, y };
+  for (let r = 1; r < Math.max(m.w, m.h); r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) === r && ok(x + dx, y + dy)) return { x: x + dx, y: y + dy };
+      }
+    }
+  }
+  return { ...m.entrance };
+}
+
 // 예전(좌우로 걷던 필드) 세이브의 무사수행을 지도 위로 옮긴다. 지금 구간의 장소만 새로 놓는다.
 export function normalizeJourney(s: GameState): GameState {
   const j = s.journey as (JourneyState & { heroX?: number }) | null | undefined;
@@ -171,7 +188,7 @@ export function normalizeJourney(s: GameState): GameState {
     day: j.day,
     maxDays: j.maxDays,
     legId: zone.legId,
-    pos: { x: zone.cx, y: zone.cy },
+    pos: standableNear(m, zone.cx, zone.cy),
     facing: 'R',
     steps: 0,
     pois: [],

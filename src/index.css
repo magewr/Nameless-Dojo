@@ -152,3 +152,15 @@ canvas.pixel-canvas {
 .animate-bob {
   animation: floatBob 0.9s steps(3) infinite;
 }
+
+/* 무사수행 지역 표제 — 떠올랐다가 천천히 사라진다 */
+@keyframes regionTitle {
+  0% { opacity: 0; transform: translateY(6px); }
+  12% { opacity: 1; transform: translateY(0); }
+  78% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.animate-region-title {
+  animation: regionTitle 3.2s ease-out forwards;
+}

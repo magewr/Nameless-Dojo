@@ -11,7 +11,8 @@
     "test:elder": "npx esbuild scripts/elderBench.ts --bundle --platform=node --outfile=/tmp/elderBench.cjs && node /tmp/elderBench.cjs",
     "test:ending": "npx esbuild scripts/endingBench.ts --bundle --platform=node --outfile=/tmp/endingBench.cjs && node /tmp/endingBench.cjs",
     "test:variety": "npx esbuild scripts/varietyBench.ts --bundle --platform=node --outfile=/tmp/varietyBench.cjs && node /tmp/varietyBench.cjs",
-    "test:journey": "npx esbuild scripts/journeyBench.ts --bundle --platform=node --outfile=/tmp/journeyBench.cjs && node /tmp/journeyBench.cjs"
+    "test:journey": "npx esbuild scripts/journeyBench.ts --bundle --platform=node --outfile=/tmp/journeyBench.cjs && node /tmp/journeyBench.cjs",
+    "map:ascii": "npx esbuild scripts/journeyMapAscii.ts --bundle --platform=node --outfile=/tmp/journeyMapAscii.cjs --log-level=error && node /tmp/journeyMapAscii.cjs"
   },
   "dependencies": {
     "lucide-react": "^1.0.0",

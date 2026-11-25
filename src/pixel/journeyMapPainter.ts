@@ -21,8 +21,6 @@ interface Pal {
   water: [string, string, string, string]; // 깊은 · 바탕 · 얕은 · 거품
   sea: [string, string, string, string];
   sand: [string, string, string];
-  soil: [string, string, string]; // 고랑 · 바탕 · 이랑
-  crop?: [string, string];
   oak: Ramp[];
   pine: Ramp;
   bush: Ramp;
@@ -46,7 +44,7 @@ const PAL: Record<Season, Pal> = {
     grass: ['#3f8a2c', '#55a033', '#62ad3c', '#86c84c'], forest: ['#2f6a24', '#3f7f2c', '#4a8c33', '#6aa842'],
     dirt: ['#8a5e38', '#b08050', '#c8985e', '#dcb47c'], bank: ['#6b4a2c', '#8a6038'],
     water: ['#2f72c0', '#3c8ad8', '#5aaaf0', '#c4ecff'], sea: ['#21579e', '#2c6cb8', '#4a8ed8', '#b8e0ff'],
-    sand: ['#e8d29a', '#f2e0ae', '#d4ba7c'], soil: ['#6a4226', '#865632', '#9e6a3e'], crop: ['#5aa83a', '#8ad050'],
+    sand: ['#e8d29a', '#f2e0ae', '#d4ba7c'],
     oak: [RAMP.springOak, RAMP.springOak, RAMP.springOak, RAMP.blossom], pine: RAMP.pine, bush: RAMP.springOak,
     flowers: ['#ffe066', '#ff9ec0', '#ffffff', '#c8a0ff'], snow: false,
   },
@@ -54,7 +52,7 @@ const PAL: Record<Season, Pal> = {
     grass: ['#2f7a2a', '#438f30', '#4f9c37', '#74b846'], forest: ['#23602a', '#2f722e', '#3a7f33', '#58a040'],
     dirt: ['#86593a', '#ab7b4e', '#c4945c', '#d8b07a'], bank: ['#664628', '#866034'],
     water: ['#2a6cb8', '#3684d2', '#55a6ec', '#c0eaff'], sea: ['#1e5298', '#2966b2', '#4688d2', '#b4dcff'],
-    sand: ['#e6d096', '#f0deaa', '#d2b878'], soil: ['#664024', '#82542e', '#9a683a'], crop: ['#3e9a32', '#74c44a'],
+    sand: ['#e6d096', '#f0deaa', '#d2b878'],
     oak: [RAMP.summerOak, RAMP.summerOak, RAMP.summerOak], pine: RAMP.pine, bush: RAMP.summerOak,
     flowers: ['#ffffff', '#ffe066', '#7ab8ff'], snow: false,
   },
@@ -62,7 +60,7 @@ const PAL: Record<Season, Pal> = {
     grass: ['#7a7a2a', '#949436', '#a2a03c', '#c0b856'], forest: ['#64642a', '#7a7830', '#868436', '#a6a048'],
     dirt: ['#86593a', '#ab7b4e', '#c4945c', '#d8b07a'], bank: ['#664628', '#866034'],
     water: ['#2a66a8', '#357ec4', '#509ee0', '#bce2f8'], sea: ['#1e4e90', '#2962aa', '#4482c8', '#b0d8f8'],
-    sand: ['#e2cc90', '#ecd8a4', '#cdb274'], soil: ['#664024', '#82542e', '#9a683a'], crop: ['#c89a2c', '#ecc650'],
+    sand: ['#e2cc90', '#ecd8a4', '#cdb274'],
     oak: [RAMP.fallOrange, RAMP.fallYellow, RAMP.fallRed, RAMP.fallOrange], pine: RAMP.pine, bush: RAMP.fallRed,
     flowers: ['#f0a040'], snow: false,
   },
@@ -70,7 +68,7 @@ const PAL: Record<Season, Pal> = {
     grass: ['#b8c8dc', '#e2eaf4', '#eef3fa', '#ffffff'], forest: ['#a8b8cc', '#d4dee9', '#e0e8f2', '#f4f8fc'],
     dirt: ['#7e6e62', '#9e8c7c', '#b4a494', '#cabcae'], bank: ['#5e5048', '#7a6a5e'],
     water: ['#3a6898', '#4a7eb0', '#6a9ccc', '#e8f4ff'], sea: ['#2a5488', '#3a68a0', '#5a88c0', '#dcecfc'],
-    sand: ['#d8d2c4', '#e8e2d6', '#c4bcac'], soil: ['#a8a4a4', '#c8ccd2', '#e4e8ee'],
+    sand: ['#d8d2c4', '#e8e2d6', '#c4bcac'],
     oak: [], pine: RAMP.winterPine, bush: ['#1e3e30', '#2e5242', '#3e6652', '#e8f0f8', '#ffffff'],
     flowers: [], snow: true,
   },
@@ -84,6 +82,31 @@ function rgb(h: string): [number, number, number] {
   const n = parseInt(h.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
+
+// 두 색 사이 (t=0이면 a)
+function mix(a: string, b: string, t: number): string {
+  const x = rgb(a);
+  const y = rgb(b);
+  const c = x.map((v, i) => Math.round(v + (y[i] - v) * t));
+  return '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+// 4×4 질서 디더 — 색이 바뀌는 자리를 도트 무늬로 섞는다
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
+const bayer = (x: number, y: number) => BAYER[(y & 3) * 4 + (x & 3)];
+
+// 논 — 봄엔 물을 대 모가 줄지어 서고, 여름엔 벼가 짙고, 가을엔 누렇게 익고, 겨울엔 그루터기에 눈
+interface Paddy {
+  base: [string, string, string]; // 그늘 · 바탕 · 빛
+  dot: [string, string]; // 모·벼이삭·그루터기
+  bund: [string, string]; // 논두렁 (윗면 · 옆면)
+}
+const PADDY: Record<Season, Paddy> = {
+  SPRING: { base: ['#5a8e86', '#72a698', '#9ccab4'], dot: ['#3f8a2c', '#8ad050'], bund: ['#7a9a3c', '#5a7a2c'] },
+  SUMMER: { base: ['#2f6e26', '#3f8a2e', '#5aa63c'], dot: ['#2a5e22', '#8acc52'], bund: ['#6a8a34', '#4a6a26'] },
+  AUTUMN: { base: ['#a2741c', '#c4962a', '#e2be4c'], dot: ['#8a5e16', '#f6dc78'], bund: ['#8a8a32', '#6a6a26'] },
+  WINTER: { base: ['#c6ccd6', '#e2e8f0', '#f6f9fc'], dot: ['#8a7a68', '#a8987e'], bund: ['#d6dde8', '#aab4c4'] },
+};
 
 // 땅의 종류 (픽셀 단위)
 const G = { GRASS: 0, FOREST: 1, DIRT: 2, WATER: 3, SEA: 4, SAND: 5, SOIL: 6, PLATEAU: 7 } as const;
@@ -169,6 +192,8 @@ export function paintFieldGround(m: JourneyMap, country: CountryId, season: Seas
     d[i * 4 + 3] = 255;
   };
   const H = (x: number, y: number, k: number) => tileHash(x, y, m.seed + k);
+  const lightGrass = mix(P.grass[2], P.grass[3], 0.45);
+  const lightForest = mix(P.forest[2], P.forest[3], 0.45);
 
   for (let py = 0; py < GH; py++) {
     for (let px = 0; px < GW; px++) {
@@ -208,8 +233,13 @@ export function paintFieldGround(m: JourneyMap, country: CountryId, season: Seas
         continue;
       }
       if (c === G.DIRT) {
-        const edge = at(px - 1, py) !== G.DIRT || at(px + 1, py) !== G.DIRT || at(px, py - 1) !== G.DIRT || at(px, py + 1) !== G.DIRT;
-        if (edge) put(i, P.dirt[0]);
+        const nb = [at(px - 1, py), at(px + 1, py), at(px, py - 1), at(px, py + 1)];
+        const edge = nb.some((n) => n !== G.DIRT && n !== -1);
+        if (edge) {
+          // 길섶 — 풀이 들쭉날쭉 길로 넘어오고, 나머지는 밟혀 다져진 흙
+          const h = H(px, py, 52);
+          put(i, h < 0.3 ? P.grass[1] : h < 0.42 ? P.grass[0] : P.dirt[1]);
+        } else if (nb.some((n) => n === -1)) put(i, P.dirt[2]);
         else {
           const h = H(px, py, 51);
           put(i, h < 0.08 ? P.dirt[1] : h > 0.95 ? P.dirt[3] : P.dirt[2]);
@@ -224,15 +254,46 @@ export function paintFieldGround(m: JourneyMap, country: CountryId, season: Seas
         continue;
       }
       if (c === G.SOIL) {
-        const row = py % 4;
-        put(i, row === 0 ? P.soil[0] : row === 3 ? P.soil[2] : P.soil[1]);
-        if ((px % 16 === 0 || py % 16 === 0) && !P.snow) put(i, P.grass[1]);
+        // 논 — 칸마다 논두렁으로 나뉜 다랑이
+        const Q = PADDY[season];
+        const lx = px % S;
+        const ly = py % S;
+        const fieldAt = (x: number, y: number) => at(x, y) === G.SOIL;
+        // 가로 두렁은 칸마다, 세로 두렁은 듬성듬성 — 논배미 크기가 들쭉날쭉하다
+        const vBund = lx === 0 && tileHash(Math.floor(px / S), Math.floor(py / S), m.seed + 87) < 0.4;
+        if (ly === 0 || vBund || !fieldAt(px, py - 1) || !fieldAt(px - 1, py)) {
+          put(i, Q.bund[0]);
+          continue;
+        }
+        if (ly === 1 || !fieldAt(px, py - 2)) {
+          put(i, Q.bund[1]); // 두렁 아래 그늘
+          continue;
+        }
+        const v = valueNoise(px / 11, py / 6, m.seed + 81) + (bayer(px, py) - 0.5) * 0.18;
+        let col = v < 0.32 ? Q.base[0] : v < 0.72 ? Q.base[1] : Q.base[2];
+        if (season === 'SPRING') {
+          // 물 댄 논 — 하늘이 비치고 모가 줄지어 섰다
+          if (lx % 4 === 2 && ly % 4 === 3) col = Q.dot[0];
+          else if (lx % 4 === 2 && ly % 4 === 2) col = Q.dot[1];
+          else if (H(px >> 2, py, 83) < 0.05) col = Q.base[2];
+        } else if (season === 'WINTER') {
+          if (lx % 4 === 2 && ly % 4 === 2) col = Q.dot[H(px, py, 84) < 0.5 ? 0 : 1];
+        } else {
+          // 벼 — 줄마다 그늘, 이삭에 빛
+          if (ly % 3 === 0) col = Q.base[0];
+          else if ((lx + (ly >> 1)) % 3 === 0 && ly % 3 === 1) col = Q.dot[1];
+          else if (H(px, py, 85) < 0.06) col = Q.dot[0];
+        }
+        put(i, col);
         continue;
       }
-      // 풀밭 (숲 바닥·고원도 같은 결로, 색만 다르게)
+      // 풀밭 (숲 바닥·고원도 같은 결로, 색만 다르게) — 큰 얼룩과 잔 얼룩을 디더로 섞어 볕 든 자리와 그늘진 자리
       const pal = c === G.FOREST ? P.forest : P.grass;
-      const tone = valueNoise(px / 22, py / 22, m.seed + 71);
-      let col = tone < 0.33 ? pal[1] : pal[2];
+      const tone = valueNoise(px / 26, py / 26, m.seed + 71) * 0.7 + valueNoise(px / 8, py / 8, m.seed + 72) * 0.3 + (bayer(px, py) - 0.5) * 0.16;
+      let col = tone < 0.36 ? pal[1] : tone < 0.66 ? pal[2] : c === G.FOREST ? lightForest : lightGrass;
+      // 길섶의 풀은 밟혀 짙다
+      if (c === G.GRASS && (at(px, py - 1) === G.DIRT || at(px, py + 1) === G.DIRT || at(px - 1, py) === G.DIRT || at(px + 1, py) === G.DIRT) && H(px, py, 76) < 0.6)
+        col = pal[1];
       // 풀포기 — 6×6 칸마다 하나, 「ᐱ」 모양
       const cx = Math.floor(px / 6);
       const cy = Math.floor(py / 6);
@@ -261,7 +322,7 @@ export function paintFieldGround(m: JourneyMap, country: CountryId, season: Seas
     ctx.fillRect(x, y, w, h);
   };
 
-  // 3) 땅에 붙은 작은 것들 — 들꽃, 논밭의 곡식
+  // 3) 땅에 붙은 작은 것들 — 들꽃
   for (let y = 0; y < m.h; y++) {
     for (let x = 0; x < m.w; x++) {
       const k = m.tiles[y * m.w + x];
@@ -281,24 +342,6 @@ export function paintFieldGround(m: JourneyMap, country: CountryId, season: Seas
           f(fx, fy - 1, 1, 1, fc);
           f(fx - 1, fy, 1, 1, fc);
           f(fx, fy, 1, 1, '#fff6c8');
-        }
-      } else if (k === 'FIELD' && P.crop) {
-        for (let cy2 = 2; cy2 < 16; cy2 += 4) {
-          for (let cx2 = 2; cx2 < 16; cx2 += 4) {
-            const px = ox + cx2;
-            const py = oy + cy2;
-            if (season === 'AUTUMN') {
-              f(px, py - 2, 1, 3, P.crop[0]);
-              f(px + 1, py - 3, 1, 3, P.crop[1]);
-              f(px - 1, py - 1, 1, 2, P.crop[0]);
-            } else if (season === 'SUMMER') {
-              f(px, py - 2, 2, 3, P.crop[0]);
-              f(px, py - 2, 1, 1, P.crop[1]);
-            } else {
-              f(px, py - 1, 1, 2, P.crop[0]);
-              f(px + 1, py - 1, 1, 1, P.crop[1]);
-            }
-          }
         }
       }
     }
@@ -603,6 +646,12 @@ function drawHouse(ctx: CanvasRenderingContext2D, ox: number, oy: number, countr
   }
   f(4, -6, 8, 1, roof[0]);
   f(5, -6, 6, 1, snow ? '#ffffff' : roof[3]);
+  if (!hall) {
+    // 굴뚝
+    f(11, -4, 3, 5, '#4a3e34');
+    f(11, -4, 2, 4, '#6e5e50');
+    f(11, -5, 3, 1, snow ? '#ffffff' : '#3a302a');
+  }
   // 처마 끝이 들린 기와 (조선·청 기와집과 전각)
   if (!thatch && country !== 'JAPAN') {
     f(-2, 3, 2, 1, roof[1]);
@@ -613,10 +662,43 @@ function drawHouse(ctx: CanvasRenderingContext2D, ox: number, oy: number, countr
   f(0, 6, 16, 1, 'rgba(20,10,0,0.35)');
 }
 
-export function paintFieldObjects(m: JourneyMap, country: CountryId, season: Season): FieldRow[] {
+// 그림자 — 해는 왼쪽 위, 그림자는 오른쪽 아래로 눕는다. 한 장의 판에 불투명하게 모아 두고 화면이 반투명하게 얹는다
+// (겹친 그림자가 두 배로 짙어지지 않게).
+const SHADOW_COL = '#12202c';
+function shadowEllipse(s: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number) {
+  for (let dy = -ry; dy <= ry; dy++) {
+    const w = Math.round(rx * Math.sqrt(1 - (dy / (ry + 0.5)) ** 2));
+    s.fillRect(cx - w, cy + dy, w * 2 + 1, 1);
+  }
+}
+
+export interface FieldObjects {
+  rows: FieldRow[];
+  shadow: HTMLCanvasElement;
+}
+
+// 연기가 오르는 굴뚝 (집 칸의 절반쯤)
+export function fieldSmokeSources(m: JourneyMap): Array<{ x: number; y: number; ph: number }> {
+  const out: Array<{ x: number; y: number; ph: number }> = [];
+  for (let y = 0; y < m.h; y++) {
+    for (let x = 0; x < m.w; x++) {
+      if (m.tiles[y * m.w + x] !== 'HOUSE') continue;
+      const h = tileHash(x, y, m.seed + 401);
+      if (h < 0.5) out.push({ x: x * TILE_PX + 12, y: y * TILE_PX - 5, ph: h * 2 });
+    }
+  }
+  return out;
+}
+
+export function paintFieldObjects(m: JourneyMap, country: CountryId, season: Season): FieldObjects {
   const P = PAL[season];
   const S = TILE_PX;
   const rows: FieldRow[] = [];
+  const shadow = document.createElement('canvas');
+  shadow.width = m.w * S;
+  shadow.height = m.h * S;
+  const sh = shadow.getContext('2d')!;
+  sh.fillStyle = SHADOW_COL;
   for (let y = 0; y < m.h; y++) {
     let cv: HTMLCanvasElement | null = null;
     let ctx: CanvasRenderingContext2D | null = null;
@@ -641,19 +723,37 @@ export function paintFieldObjects(m: JourneyMap, country: CountryId, season: Sea
       if (k === 'FOREST') {
         const c = get();
         const pine = r < (season === 'WINTER' ? 0.6 : 0.4);
-        if (pine) drawPine(c, ox + 8 + jx, oy + 15, P.pine, 22 + Math.floor(r * 10));
-        else if (P.snow) drawBareTree(c, ox + 8 + jx, oy + 15, seed);
-        else drawOak(c, ox + 8 + jx, oy + 15, P.oak[Math.floor(tileHash(x, y, m.seed + 205) * P.oak.length)], seed);
+        const bx = ox + 8 + jx;
+        if (pine) {
+          drawPine(c, bx, oy + 15, P.pine, 22 + Math.floor(r * 10));
+          shadowEllipse(sh, bx + 4, oy + 15, 7, 3);
+          shadowEllipse(sh, bx + 10, oy + 16, 4, 2);
+        } else if (P.snow) {
+          drawBareTree(c, bx, oy + 15, seed);
+          shadowEllipse(sh, bx + 5, oy + 15, 6, 2);
+        } else {
+          drawOak(c, bx, oy + 15, P.oak[Math.floor(tileHash(x, y, m.seed + 205) * P.oak.length)], seed);
+          shadowEllipse(sh, bx + 5, oy + 15, 10, 4);
+        }
       } else if (k === 'PLAIN' || k === 'HILL') {
         const lone = k === 'PLAIN' ? 0.955 : 0.9;
         if (r > lone) {
           const c = get();
-          if (P.snow) drawBareTree(c, ox + 8 + jx, oy + 15, seed);
-          else drawOak(c, ox + 8 + jx, oy + 15, P.oak[Math.floor(tileHash(x, y, m.seed + 206) * P.oak.length)], seed);
+          if (P.snow) {
+            drawBareTree(c, ox + 8 + jx, oy + 15, seed);
+            shadowEllipse(sh, ox + 13 + jx, oy + 15, 6, 2);
+          } else {
+            drawOak(c, ox + 8 + jx, oy + 15, P.oak[Math.floor(tileHash(x, y, m.seed + 206) * P.oak.length)], seed);
+            shadowEllipse(sh, ox + 13 + jx, oy + 15, 10, 4);
+          }
         } else if (r < (k === 'HILL' ? 0.22 : 0.07)) {
-          drawBush(get(), ox + 5 + Math.floor(r * 40), oy + 13, P.bush, season === 'SUMMER' ? '#e04848' : season === 'AUTUMN' ? '#7a3aa8' : null);
+          const bx = ox + 5 + Math.floor(r * 40);
+          drawBush(get(), bx, oy + 13, P.bush, season === 'SUMMER' ? '#e04848' : season === 'AUTUMN' ? '#7a3aa8' : null);
+          shadowEllipse(sh, bx + 3, oy + 13, 6, 2);
         } else if (r > (k === 'HILL' ? 0.84 : 0.92)) {
-          drawBoulder(get(), ox + 4 + Math.floor((r - 0.84) * 40), oy + 13, 2, P.snow, !P.snow);
+          const bx = ox + 4 + Math.floor((r - 0.84) * 40);
+          drawBoulder(get(), bx, oy + 13, 2, P.snow, !P.snow);
+          shadowEllipse(sh, bx + 2, oy + 13, 4, 1);
         }
       } else if (k === 'REED') {
         drawCattails(get(), ox, oy, seed, P.snow);
@@ -661,14 +761,23 @@ export function paintFieldObjects(m: JourneyMap, country: CountryId, season: Sea
         const c = get();
         drawBoulder(c, ox + 5, oy + 12, 4, P.snow, r < 0.4 && !P.snow);
         drawBoulder(c, ox + 12, oy + 15, 3, P.snow, false);
+        shadowEllipse(sh, ox + 9, oy + 12, 6, 2);
+        shadowEllipse(sh, ox + 15, oy + 15, 5, 2);
       } else if (k === 'PEAK') {
         // 고원의 나무와 바위 — 절벽 쪽 칸(남쪽이 트인 칸)은 비워 둔다
         const south = y + 1 < m.h ? m.tiles[(y + 1) * m.w + x] : 'PEAK';
         if (south !== 'PEAK') continue;
-        if (r < 0.5) drawPine(get(), ox + 8 + jx, oy + 14, P.pine, 18 + Math.floor(r * 12));
-        else if (r < 0.62) drawBoulder(get(), ox + 8, oy + 12, 3, P.snow, !P.snow);
+        if (r < 0.5) {
+          drawPine(get(), ox + 8 + jx, oy + 14, P.pine, 18 + Math.floor(r * 12));
+          shadowEllipse(sh, ox + 12 + jx, oy + 14, 6, 2);
+        } else if (r < 0.62) {
+          drawBoulder(get(), ox + 8, oy + 12, 3, P.snow, !P.snow);
+          shadowEllipse(sh, ox + 11, oy + 12, 5, 2);
+        }
       } else if (k === 'HOUSE' || k === 'HALL') {
         drawHouse(get(), ox, oy, country, k === 'HALL', r, P.snow);
+        sh.fillRect(ox + 4, oy + 14, 16, 4);
+        sh.fillRect(ox + 16, oy + 6, 4, 8);
       } else if (k === 'SAND' && r < 0.08) {
         // 조개껍데기
         const c = get();
@@ -680,32 +789,121 @@ export function paintFieldObjects(m: JourneyMap, country: CountryId, season: Sea
     }
     rows.push({ canvas: cv, y: top });
   }
-  return rows;
+  return { rows, shadow };
 }
 
-// ───────── 안개 (아직 밟지 않은 땅) ─────────
-export function paintFieldFog(m: JourneyMap, visited: Set<string>): HTMLCanvasElement {
+// ───────── 안개 (아직 밟지 않은 땅) — 산수화의 운해처럼 ─────────
+// 밟지 않은 칸마다 뭉게구름 덩어리를 얹는다. 덩어리는 위 왼쪽이 볕을 받아 희고 아래가 그늘진다.
+// 위 줄부터 차례로 겹쳐 그려 아래 덩어리가 위 덩어리를 덮으니 뭉게뭉게 쌓인 모양이 된다. 화면이 반투명하게 얹는다.
+const FOG: Record<'DAY' | 'SNOW', [string, string, string, string]> = {
+  // 그늘 · 바탕 · 빛 · 테두리
+  DAY: ['#a9a6c6', '#d9d7ea', '#f1f0f8', '#8a87aa'],
+  SNOW: ['#6c7896', '#929eba', '#b8c2d8', '#55607c'],
+};
+
+export function paintFieldFog(m: JourneyMap, visited: Set<string>, season: Season): HTMLCanvasElement {
   const S = TILE_PX;
   const GW = m.w * S;
   const GH = m.h * S;
-  const img = new ImageData(GW, GH);
-  const d = img.data;
+  const C = season === 'WINTER' ? FOG.SNOW : FOG.DAY;
   const known = (x: number, y: number) => x < 0 || y < 0 || x >= m.w || y >= m.h || visited.has(m.zones[m.zone[y * m.w + x]].legId);
+  // 1) 덩어리 — 밟지 않은 칸마다 둥근 뭉게 하나, 합친 모양이 구름 둑이 된다
+  const puffs: Array<[number, number, number, number]> = [];
+  for (let y = 0; y < m.h; y++) {
+    for (let x = 0; x < m.w; x++) {
+      if (known(x, y)) continue;
+      const jx = (tileHash(x, y, m.seed + 333) - 0.5) * 8;
+      const jy = (tileHash(x, y, m.seed + 337) - 0.5) * 6;
+      const r = 11 + Math.floor(tileHash(x, y, m.seed + 339) * 4);
+      puffs.push([Math.round(x * S + 8 + jx), Math.round(y * S + 8 + jy), r, tileHash(x, y, m.seed + 341)]);
+    }
+  }
+  const mk = document.createElement('canvas');
+  mk.width = GW;
+  mk.height = GH;
+  const mctx = mk.getContext('2d')!;
+  puffs.forEach(([x, y, r]) => blob(mctx, x, y, r, '#fff'));
+  const md = mctx.getImageData(0, 0, GW, GH).data;
+  const inFog = (x: number, y: number) => x >= 0 && y >= 0 && x < GW && y < GH && md[(y * GW + x) * 4 + 3] > 0;
+  // 2) 칠하기 — 바탕은 한 빛, 윗테두리는 볕, 아랫테두리는 그늘
+  const shade = new Uint8Array(GW * GH); // 0 없음 · 1 바탕 · 2 그늘 · 3 빛 · 4 테두리
   for (let py = 0; py < GH; py++) {
     for (let px = 0; px < GW; px++) {
-      const sx = px + (valueNoise(px / 9, py / 9, m.seed + 301) - 0.5) * 12;
-      const sy = py + (valueNoise(px / 9, py / 9, m.seed + 307) - 0.5) * 12;
-      if (known(Math.floor(sx / S), Math.floor(sy / S))) continue;
-      const i = (py * GW + px) * 4;
-      d[i] = 22;
-      d[i + 1] = 18;
-      d[i + 2] = 38;
-      d[i + 3] = 140;
+      if (!inFog(px, py)) continue;
+      const i = py * GW + px;
+      if (!inFog(px, py + 1)) shade[i] = 4;
+      else if (!inFog(px, py + 2) || !inFog(px, py + 3) || !inFog(px - 1, py) || !inFog(px + 1, py)) shade[i] = 2;
+      else if (!inFog(px, py - 1) || !inFog(px, py - 2) || !inFog(px, py - 3)) shade[i] = 3;
+      else shade[i] = 1;
     }
+  }
+  // 3) 속의 혹 — 덩어리 몇에만 둥근 윗선(빛)과 그 밑 그늘을 그어 겹겹이 쌓인 느낌을 낸다
+  puffs.forEach(([cx, cy, r, h]) => {
+    if (h > 0.1) return;
+    for (let a = 0.45; a < Math.PI - 0.45; a += 0.04) {
+      const x = Math.round(cx + Math.cos(a) * r);
+      const y = Math.round(cy - Math.sin(a) * r);
+      for (let t = 0; t < 3; t++) {
+        const yy = y + t;
+        if (!inFog(x, yy) || !inFog(x, yy - 3)) continue;
+        const i = yy * GW + x;
+        if (shade[i] === 1) shade[i] = t === 0 ? 2 : 3;
+      }
+    }
+  });
+  const col = [null, C[1], C[0], C[2], C[3]].map((c) => (c ? rgb(c) : null));
+  const img = new ImageData(GW, GH);
+  const d = img.data;
+  for (let i = 0; i < shade.length; i++) {
+    const c = col[shade[i]];
+    if (!c) continue;
+    d[i * 4] = c[0];
+    d[i * 4 + 1] = c[1];
+    d[i * 4 + 2] = c[2];
+    d[i * 4 + 3] = 255;
   }
   const cv = document.createElement('canvas');
   cv.width = GW;
   cv.height = GH;
+  cv.getContext('2d')!.putImageData(img, 0, 0);
+  return cv;
+}
+
+// ───────── 구름 그림자 — 이어 붙여도 이음매가 없는 판 한 장, 화면이 천천히 흘려 보낸다 ─────────
+export const CLOUD_TILE = 256;
+function periodicNoise(x: number, y: number, period: number, seed: number): number {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const w = (v: number) => ((v % period) + period) % period;
+  const a = tileHash(w(x0), w(y0), seed);
+  const b = tileHash(w(x0 + 1), w(y0), seed);
+  const c = tileHash(w(x0), w(y0 + 1), seed);
+  const e = tileHash(w(x0 + 1), w(y0 + 1), seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + e) * sx * sy;
+}
+
+export function paintCloudShadows(seed: number): HTMLCanvasElement {
+  const N = CLOUD_TILE;
+  const img = new ImageData(N, N);
+  const d = img.data;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const v = periodicNoise(x / 64, y / 64, 4, seed + 501) * 0.65 + periodicNoise(x / 21.333, y / 21.333, 12, seed + 503) * 0.35;
+      if (v + (bayer(x, y) - 0.5) * 0.08 < 0.6) continue;
+      const i = (y * N + x) * 4;
+      d[i] = 18;
+      d[i + 1] = 26;
+      d[i + 2] = 48;
+      d[i + 3] = 255;
+    }
+  }
+  const cv = document.createElement('canvas');
+  cv.width = N;
+  cv.height = N;
   cv.getContext('2d')!.putImageData(img, 0, 0);
   return cv;
 }
@@ -914,4 +1112,60 @@ export function drawFieldHero(
     oneArm: o.oneArm,
     now: o.now,
   });
+}
+
+// ───────── 그림 지도 ─────────
+// 지역 지도를 통째로 그린 그림(px_jr_map_<지역>.jpg)이 있으면 땅·나무·집을 코드로 그리지 않고 그 그림을 깐다.
+// 도장 마당(px_dojo_grand_map.jpg)과 같은 방식이다. 칸 배치는 journeyMapLayouts.ts에서 그림에 맞춘다.
+export function paintedMapSources(regionId: string, season: Season): { seasonal: string; base: string } {
+  const id = regionId.toLowerCase();
+  return { seasonal: `/assets/px_jr_map_${id}_${season.toLowerCase()}.jpg`, base: `/assets/px_jr_map_${id}.jpg` };
+}
+
+// 그림 지도의 안개 — 아직 발을 들이지 않은 땅은 빛이 바래고 어둑하게 가라앉는다.
+// 그림과 같은 크기로 만들고, 경계는 한 칸에 걸쳐 부드럽게 풀린다.
+export function paintPaintedVeil(img: HTMLImageElement, m: JourneyMap, visited: Set<string>, season: Season): HTMLCanvasElement {
+  const IW = img.naturalWidth;
+  const IH = img.naturalHeight;
+  const out = document.createElement('canvas');
+  out.width = IW;
+  out.height = IH;
+  const o = out.getContext('2d')!;
+  o.drawImage(img, 0, 0);
+  // 색을 빼고, 푸르스름하게 가라앉히고, 엷은 운무를 한 겹
+  o.globalCompositeOperation = 'saturation';
+  o.fillStyle = 'rgba(128,128,128,0.8)';
+  o.fillRect(0, 0, IW, IH);
+  o.globalCompositeOperation = 'multiply';
+  o.fillStyle = season === 'WINTER' ? '#6f7890' : '#77748f';
+  o.fillRect(0, 0, IW, IH);
+  o.globalCompositeOperation = 'source-over';
+  o.fillStyle = season === 'WINTER' ? 'rgba(226,232,244,0.12)' : 'rgba(206,202,226,0.2)';
+  o.fillRect(0, 0, IW, IH);
+  // 가리개 — 칸 하나가 화소 하나인 작은 판을 부드럽게 키운다
+  const mk = document.createElement('canvas');
+  mk.width = m.w;
+  mk.height = m.h;
+  const mctx = mk.getContext('2d')!;
+  const md = mctx.createImageData(m.w, m.h);
+  for (let y = 0; y < m.h; y++) {
+    for (let x = 0; x < m.w; x++) {
+      const known = visited.has(m.zones[m.zone[y * m.w + x]].legId);
+      md.data[(y * m.w + x) * 4 + 3] = known ? 0 : 255;
+    }
+  }
+  mctx.putImageData(md, 0, 0);
+  // 두 번에 나눠 키우면 경계가 계단 없이 풀린다
+  const mid = document.createElement('canvas');
+  mid.width = m.w * 4;
+  mid.height = m.h * 4;
+  const midc = mid.getContext('2d')!;
+  midc.imageSmoothingEnabled = true;
+  midc.drawImage(mk, 0, 0, mid.width, mid.height);
+  o.globalCompositeOperation = 'destination-in';
+  o.imageSmoothingEnabled = true;
+  o.imageSmoothingQuality = 'high';
+  o.drawImage(mid, 0, 0, IW, IH);
+  o.globalCompositeOperation = 'source-over';
+  return out;
 }

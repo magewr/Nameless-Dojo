@@ -1,5 +1,6 @@
 import { JourneyRegionId, Season } from '../types/game';
 import { getRegion, JourneyRegion, JourneyTerrain } from './journeyRegions';
+import { MAP_LAYOUTS } from './journeyMapLayouts';
 
 // ───────────────────────── 무사수행 지도 ─────────────────────────
 // 프린세스 메이커 2의 무사수행처럼, 한 지역은 위·아래·왼쪽·오른쪽으로 한 칸씩 걷는 지도 한 장이다.
@@ -114,6 +115,39 @@ export function valueNoise(x: number, y: number, seed: number): number {
 
 export function tileHash(x: number, y: number, seed: number): number {
   return hash2(x, y, seed);
+}
+
+// ───────── 칸 배치 글자 ─────────
+// 그림 지도에 맞춘 칸 배치는 journeyMapLayouts.ts에 글자 그림으로 적는다. 한 글자가 한 칸이다.
+export const TILE_CHAR: Record<TileKind, string> = {
+  PLAIN: '.',
+  ROAD: '=',
+  BRIDGE: '#',
+  FIELD: 'f',
+  FOREST: 'T',
+  HILL: 'h',
+  SAND: 's',
+  REED: 'r',
+  PEAK: '^',
+  ROCK: 'R',
+  WATER: '~',
+  SEA: 'w',
+  HOUSE: 'H',
+  HALL: 'A',
+};
+const CHAR_TILE: Record<string, TileKind> = Object.fromEntries(Object.entries(TILE_CHAR).map(([k, c]) => [c, k as TileKind]));
+
+function parseLayout(rows: string[], W: number, H: number): TileKind[] | null {
+  if (rows.length !== H || rows.some((r) => r.length !== W)) return null;
+  const out: TileKind[] = [];
+  for (const r of rows) for (const c of r) out.push(CHAR_TILE[c] || 'PLAIN');
+  return out;
+}
+
+export function mapToLayout(m: JourneyMap): string[] {
+  const rows: string[] = [];
+  for (let y = 0; y < m.h; y++) rows.push(m.tiles.slice(y * m.w, (y + 1) * m.w).map((k) => TILE_CHAR[k]).join(''));
+  return rows;
 }
 
 const COL_W = 9;
@@ -341,6 +375,17 @@ function buildMap(region: JourneyRegion): JourneyMap {
       carve(a.cx, a.cy, b.cx, b.cy);
     });
   });
+
+  // 6-1) 그림 지도가 있는 지역은 그림에 맞춰 고친 칸 배치로 갈아 끼운다 (땅 나눔은 그대로 둔다)
+  const layout = MAP_LAYOUTS[region.id];
+  if (layout) {
+    const fitted = parseLayout(layout, W, H);
+    if (fitted) {
+      fitted.forEach((k, i) => (tiles[i] = k));
+      tiles[at(entrance.x, entrance.y)] = 'ROAD';
+    }
+    else console.warn(`[journeyMap] ${region.id} 칸 배치의 크기가 ${W}×${H}와 맞지 않아 무시한다`);
+  }
 
   // 7) 출발점에서 걸어서 닿는 칸, 그리고 길까지의 거리
   const pass = (i: number) => TILE_INFO[tiles[i]].pass;
