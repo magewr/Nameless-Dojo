@@ -7,11 +7,14 @@ import { applyTranscendParry, hasTranscendence, isUnparryableByTranscendence } f
 import { getBattleOverlayResultCopy } from '../data/battleDialogue';
 import { sound } from '../engine/sound';
 import {
+  getBattleStageSrc,
+  getBeastKoIndex,
   getEnemyFightGridSrc,
   getGridSpriteSheet,
   getHeroFightGridSrc,
   getKoFallenIndex,
   getVfxGridSheet,
+  isBeastFightSheet,
   loadRawImage,
   preloadAllGameArt,
   VFX_SHEETS,
@@ -1855,7 +1858,12 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
           ctx.translate(-camLeft, -camTop);
 
           // 배경 무대
-          const bgImg = loadRawImage(battle.isRealDuel ? '/assets/px_battle_duel_stage.jpg' : '/assets/px_battle_stage.jpg');
+          const bgImg = loadRawImage(
+            getBattleStageSrc(state.country, {
+              isRealDuel: battle.isRealDuel,
+              isTournament: battle.isTournament,
+            })
+          );
           if (bgImg) ctx.drawImage(bgImg, 0, 0, CANVAS_W, CANVAS_H);
           else { ctx.fillStyle = '#1a120d'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H); }
 
@@ -1873,7 +1881,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             const sheet = getGridSpriteSheet(g.sheetSrc, 4, 2);
             if (!sheet || sheet.frames.length < 8) return;
             const sp = sheet.frames[g.frameIdx % sheet.frames.length];
-            const ratio = 176 / Math.max(1, sheet.refHeight);
+            const ratio = (isBeastFightSheet(g.sheetSrc) ? 120 : 176) / Math.max(1, sheet.refHeight);
             const dw = Math.round(sp.width * ratio);
             const dh = Math.round(sp.height * ratio);
             const ax = Math.round(sp.anchorX * ratio);
@@ -1919,28 +1927,31 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             const shiver = now < f.hurtPoseUntil && now < metaRef.current.hitstopUntil && f.hp > 0 ? (Math.floor(now / 34) % 2 === 0 ? 2 : -2) : 0;
             const drawX = Math.round(f.x + f.lungeOffset + f.recoilOffset + shiver);
 
-            // ★ 패배(HP <= 0) 또는 항복 시 실제 바닥에 쓰러진/무릎 꿇은 KO 스프라이트(grid_ko_fallen_4x2.jpg) 렌더링! ★
+            // ★ 패배(HP <= 0) 또는 항복 시 실제 바닥에 쓰러진/무릎 꿇은 KO 스프라이트(grid_ko_fallen_4x2.jpg / grid_ko_beast_4x2.jpg) 렌더링! ★
             if (f.hp <= 0 || f.yielded) {
-              const koSheet = getGridSpriteSheet('/assets/grid_ko_fallen_4x2.jpg', 4, 2);
+              const isBeastEnemy = !isHeroSide && isBeastFightSheet(sheetSrc);
+              const koSheet = getGridSpriteSheet(isBeastEnemy ? '/assets/grid_ko_beast_4x2.jpg' : '/assets/grid_ko_fallen_4x2.jpg', 4, 2);
               ctx.fillStyle = 'rgba(10, 8, 5, 0.55)';
               ctx.beginPath();
               ctx.ellipse(drawX, GROUND_Y + 2, 76, 14, 0, 0, Math.PI * 2);
               ctx.fill();
               if (koSheet && koSheet.frames.length >= 8) {
-                const koIdx = getKoFallenIndex({
-                  isHero: isHeroSide,
-                  country: heroCountry,
-                  gender: heroGender,
-                  age: f.age,
-                  enemySrc: isHeroSide ? undefined : sheetSrc,
-                });
+                const koIdx = isBeastEnemy
+                  ? getBeastKoIndex(sheetSrc, Boolean(f.yielded))
+                  : getKoFallenIndex({
+                      isHero: isHeroSide,
+                      country: heroCountry,
+                      gender: heroGender,
+                      age: f.age,
+                      enemySrc: isHeroSide ? undefined : sheetSrc,
+                    });
                 const sp = koSheet.frames[koIdx];
                 // KO 8종(무릎 꿇은 자세 / 완전히 누운 자세) 모두 자연스러운 크기로 바닥에 착지!
                 const ratio = Math.min(168 / Math.max(1, sp.width), 104 / Math.max(1, sp.height));
                 const dw = Math.round(sp.width * ratio);
                 const dh = Math.round(sp.height * ratio);
-                // grid_ko_fallen_4x2에서 0번만 우향, 1~7번은 좌향
-                const koNativeRight = koIdx === 0;
+                // grid_ko_fallen_4x2에서 0번만 우향, 1~7번은 좌향. 맹수 KO 시트(grid_ko_beast_4x2)는 전부 좌향.
+                const koNativeRight = !isBeastEnemy && koIdx === 0;
                 const flipKo = isHeroSide ? (koNativeRight ? 1 : -1) : (koNativeRight ? -1 : 1);
                 ctx.save();
                 ctx.translate(drawX, GROUND_Y + 6);
@@ -1987,7 +1998,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
             if (!sheet || sheet.frames.length < 8) return;
             const fIdx = resolvePoseFrame(f);
             const sp = sheet.frames[fIdx];
-            const ratio = 176 / Math.max(1, sheet.refHeight);
+            const ratio = (isBeastFightSheet(sheetSrc) ? 120 : 176) / Math.max(1, sheet.refHeight);
             const dw = Math.round(sp.width * ratio);
             const dh = Math.round(sp.height * ratio);
             const ax = Math.round(sp.anchorX * ratio);
@@ -2504,7 +2515,7 @@ export const AutoBattleView: React.FC<Props> = ({ state, battle, onChangeTactic,
                   const age = el - gs.atMs;
                   const fade = Math.max(0.14, 0.52 - age / 900);
                   const sp = gSheet.frames[gs.frameIdx % 8];
-                  const ratio = 176 / Math.max(1, gSheet.refHeight);
+                  const ratio = (isBeastFightSheet(ds.attackerSheet) ? 120 : 176) / Math.max(1, gSheet.refHeight);
                   const dw = Math.round(sp.width * ratio);
                   const dh = Math.round(sp.height * ratio);
                   const ax = Math.round(sp.anchorX * ratio);

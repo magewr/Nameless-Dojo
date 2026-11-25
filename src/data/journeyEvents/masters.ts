@@ -201,7 +201,7 @@ export const MASTER_EVENTS: JourneyEventDef[] = MASTERS.map(
         title: `은거 고수 — ${m.name}`,
         category: 'DUEL',
         sceneActor: 'RIVAL',
-        illustration: '/assets/px_chr_v_grandmaster.jpg',
+        illustration: `/assets/px_jr_${m.key}.jpg`,
         narration: m.scene,
         script: [N(m.scene), P(m.name, m.greet), H(s, `${s.sectName}의 ${s.name}이라 합니다. 한 수 가르침을 청하러 왔습니다.`, '포권하며')],
         options: [

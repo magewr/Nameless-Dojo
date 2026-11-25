@@ -16,6 +16,7 @@ import {
   journeyBattle,
   N,
   P,
+  pickFresh,
   rand,
   remember,
   roadScale,
@@ -23,7 +24,7 @@ import {
   takeEcho,
   trainEquipped,
 } from '../../engine/journeyCore';
-import { fighterPower, makePersonName, randomSectName } from '../../engine/tourney';
+import { fighterPower, makePersonName, randomSectName, takenNames } from '../../engine/tourney';
 import { adjustRelation } from '../../engine/sectLogic';
 import { metSects } from '../sects';
 import { rumorsFor } from '../journeyRegions';
@@ -56,11 +57,14 @@ const town = (s: GameState) => rand(byCountry(s, ['읍내', '장터', '나루터
 const challenge: JourneyEventDef = {
   key: 'home_challenge',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 66 ? 0.4 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 10 && s.fame >= 80,
   build: (s) => {
-    const roster = (s.tourneyRoster || []).filter((f) => !f.retired && s.year - f.bornYear < 65);
+    const taken = takenNames(s);
+    // 명부의 고수라도 내 제자·배우자·숙적과 이름이 같으면 고르지 않는다 (「도전장 — 개방의 조자룡」이 죽은 제자처럼 읽힌다)
+    const roster = (s.tourneyRoster || []).filter((f) => !f.retired && s.year - f.bornYear < 65 && !taken.has(f.name));
     const f = roster.length ? rand(roster) : null;
-    const name = f?.name || makePersonName(s.country);
+    const name = f?.name || makePersonName(s.country, taken);
     const sect = f?.sect || randomSectName(s.country);
     const power = f ? fighterPower(f, s.year) : roadScale(s, 0.9 + Math.random() * 0.4);
     const record = f && f.titles > 0 ? `천하대회 우승 ${f.titles}회의 ` : f && (f.bestRound ?? -1) >= 2 ? '지난 천하대회 4강의 ' : '';
@@ -127,19 +131,27 @@ const COMMISSIONS = [
   { k: 'caravan', title: '상단의 호위', who: '상단 행수', ask: '고개 너머까지 짐을 옮기는데, 요즘 그 고개에 도적이 나온다 하오.', stat: 'str' as const, reward: 90, fail: '도적에게 짐 한 수레를 빼앗겼다. 행수가 사례를 깎았다.' },
   { k: 'tutor', title: '사또 자제의 무예 지도', who: '관아 이방', ask: '사또 나리의 도령께 무예를 좀 가르쳐 주십사… 성미가 보통이 아니시오.', stat: 'wil' as const, reward: 70, fail: '도령이 사흘 만에 울며 뛰쳐나갔다. 사또의 눈총을 받았다.' },
   { k: 'temple', title: '사찰 보물 경비', who: '절의 주지', ask: '부처님 사리를 노리는 도둑이 있다는 소문이… 사흘 밤만 지켜 주시오.', stat: 'vit' as const, reward: 40, fail: '사흘째 밤, 깜빡 조는 사이 도둑이 들었다. 다행히 사리는 무사했지만 체면을 구겼다.' },
+  { k: 'bride', title: '혼행(婚行) 가마 호위', who: '신부 댁 늙은 하인', ask: '고개 너머 신랑 댁까지 가마를 모셔야 하는데, 요즘 그 고개에서 왈패들이 혼행을 털어 간다지 뭡니까.', stat: 'str' as const, reward: 60, fail: '왈패들에게 예물 함 하나를 빼앗겼다. 혼례는 치렀지만 신부 댁 볼 낯이 없었다.' },
+  { k: 'boar', title: '밭을 갈아엎는 멧돼지', who: '산밭 농부', ask: '멧돼지 한 마리가 밤마다 내려와 밭을 갈아엎습니다. 덩치가 송아지만 해서 아무도 못 덤벼요.', stat: 'agi' as const, reward: 35, fail: '사흘 밤을 지켰지만 멧돼지는 다른 밭으로 내려갔다. 농부의 한숨만 들었다.' },
+  { k: 'haunt', title: '곡소리 나는 별채', who: '객주 주인', ask: '빈 별채에서 밤마다 곡소리가 난다고 손님이 끊겼습니다. 칼 찬 분이 하룻밤만 묵어 주시면…', stat: 'wil' as const, reward: 45, fail: '자정 무렵 들려온 소리에 그만 칼을 뽑고 말았다. 지붕 위 고양이였다. 소문은 더 흉흉해졌다.' },
 ];
 const commission: JourneyEventDef = {
   key: 'home_commission',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 66 ? 0.5 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 5,
   build: (s) => {
-    const c = rand(COMMISSIONS);
+    // 사또·이방은 조선의 말 — 나라에 맞게 바꾼다. 최근에 받은 의뢰는 피해서 고른다.
+    const c0 = pickFresh(s, 'home_commission', COMMISSIONS.map((x) => ({ ...x, id: x.k })));
+    const loc = (t: string) => (s.country === 'KOREA' ? t : t.replace(/사또/g, byCountry(s, '사또', '지현', '다이칸')).replace(/관아 이방/g, byCountry(s, '관아 이방', '현청 서리', '다이칸소 하급 관리')));
+    const c = { ...c0, title: loc(c0.title), who: loc(c0.who), ask: loc(c0.ask), fail: loc(c0.fail) };
     const p = clampP(0.35 + (s.stats[c.stat] - 25) * 0.009);
     const d = bestDisciple(s);
     const pd = d ? clampP(0.3 + (d.stats[c.stat] - 25) * 0.009) : 0;
     return {
       title: `의뢰 — ${c.title}`,
       category: 'LIFE',
+      speaker: c.who,
       narration: `${josa(c.who, '이가')} 도장을 찾아왔다.`,
       script: [N(`${town(s)}의 ${josa(c.who, '이가')} 도장 마루에 걸터앉아 한숨을 쉰다.`), P(c.who, c.ask)],
       options: [
@@ -147,11 +159,13 @@ const commission: JourneyEventDef = {
         ...(d ? [{ id: 'send', label: `${d.name}에게 맡긴다`, hint: `성공 확률 약 ${pct(pd)} · 제자가 경험을 쌓는다` }] : []),
         { id: 'refuse', label: '도장 일이 바쁘다며 사양한다' },
       ],
-      meta: { k: c.k, p, pd, did: d?.id || '' },
+      meta: { k: c.k, p, pd, did: d?.id || '', vkey: c.k },
     };
   },
   resolve: (s, opt, c) => {
-    const def = COMMISSIONS.find((x) => x.k === c.data?.k) || COMMISSIONS[0];
+    const raw = COMMISSIONS.find((x) => x.k === c.data?.k) || COMMISSIONS[0];
+    const loc = (t: string) => (s.country === 'KOREA' ? t : t.replace(/사또/g, byCountry(s, '사또', '지현', '다이칸')).replace(/관아 이방/g, byCountry(s, '관아 이방', '현청 서리', '다이칸소 하급 관리')));
+    const def = { ...raw, who: loc(raw.who), fail: loc(raw.fail) };
     if (opt === 'refuse') return say(addRep(s, { virtue: -2 }), [['나레이션', `${josa(def.who, '이가')} 힘없이 돌아갔다.`]]);
     const isSend = opt === 'send';
     const ok = chance(Number(isSend ? c.data?.pd : c.data?.p));
@@ -161,8 +175,8 @@ const commission: JourneyEventDef = {
     if (ok) {
       n = addRep(addFame(addMoney(n, def.reward), 10), { virtue: 5 });
       if (def.k === 'missing') n = remember(n, 'missing_child', 'FOUND');
-      if (def.k === 'tutor' && chance(0.4)) n = addEcho(n, { key: 'magistrate_son', minYears: 6, maxYears: 12, channel: 'HOME', bornText: '사또의 성미 고약한 도령에게 무예를 가르쳤다' });
-      return say(n, [['나레이션', `${isSend ? `${josa(findDisc(n, c.data?.did)?.name || '제자', '이가')}` : '내가'} 해냈다. ${josa(def.who, '이가')} 사례로 ${def.reward}${cur(n)}을 내놓았다. (명성 +10)`]]);
+      if (def.k === 'tutor' && chance(0.4)) n = addEcho(n, { key: 'magistrate_son', minYears: 6, maxYears: 12, channel: 'HOME', bornText: loc('사또의 성미 고약한 도령에게 무예를 가르쳤다') });
+      return say(n, [['나레이션', `${isSend ? `${josa(findDisc(n, c.data?.did)?.name || '제자', '이가')}` : '내가'} 해냈다. ${josa(def.who, '이가')} 사례로 ${josa(`${def.reward}${cur(n)}`, '을를')} 내놓았다. (명성 +10)`]]);
     }
     return say(addFame(n, -4), [['나레이션', def.fail]]);
   },
@@ -176,7 +190,9 @@ const discipleStory: JourneyEventDef = {
   cond: (s) => alive(s).length >= 1 && s.turn >= 6,
   build: (s) => {
     const d = rand(alive(s));
-    let k: (typeof DSTORIES)[number] = rand([...DSTORIES]);
+    // 최근에 겪은 사연은 피해서 고른다 (경쟁은 제자가 둘 이상, 스카우트는 아는 문파가 있을 때만)
+    const storyPool = DSTORIES.map((id) => ({ id, when: (x: GameState) => (id === 'rivalry' ? alive(x).length >= 2 : id === 'scout' ? metSects(x).length > 0 : true) }));
+    let k: (typeof DSTORIES)[number] = pickFresh(s, 'home_disciple_story', storyPool).id;
     if (k === 'rivalry' && alive(s).length < 2) k = 'doubt';
     if (k === 'scout' && metSects(s).length === 0) k = 'parent';
     if ((d.temperament === 'LAZY' || d.temperament === 'GREEDY') && chance(0.5)) k = 'debt';
@@ -250,7 +266,7 @@ const discipleStory: JourneyEventDef = {
       },
     };
     const L = lines[k];
-    return { title: L.title, category: 'FAMILY', sceneActor: 'DISCIPLE', narration: L.script[0].text, script: L.script, options: L.options, meta: { k, did: d.id, oid: other?.id || '', sid: sect?.id || '' } };
+    return { title: L.title, category: 'FAMILY', sceneActor: 'DISCIPLE', narration: L.script[0].text, script: L.script, options: L.options, meta: { k, did: d.id, oid: other?.id || '', sid: sect?.id || '', vkey: k } };
   },
   resolve: (s, opt, c) => {
     const d = findDisc(s, c.data?.did);
@@ -327,24 +343,84 @@ const discipleStory: JourneyEventDef = {
 };
 
 // ───────── 4. 시절 행사 — 나라와 계절마다 다르다 ─────────
-const FEST: Record<string, Record<Season, { name: string; scene: string; game: string }>> = {
+// 나라·계절마다 두 가지 행사를 두고, 지난번에 본 행사는 피해서 고른다 (해마다 같은 단오 씨름판이 되풀이되지 않게).
+// risky: 지면 크게 다치는 거친 놀이 (석전·가마 싸움) — 이기고 지는 이야기를 따로 둔다.
+interface FestDef {
+  name: string;
+  scene: string;
+  game: string;
+  risky?: { win: string; lose: string };
+}
+const FEST: Record<string, Record<Season, FestDef[]>> = {
   KOREA: {
-    SPRING: { name: '삼짇날 화전놀이와 편사(便射)', scene: '진달래가 핀 산자락에서 고을 활량들이 편을 갈라 활을 쏜다.', game: '활쏘기 편사에 나간다' },
-    SUMMER: { name: '단오 씨름판', scene: '창포물에 머리 감은 사람들이 모래판을 둘러쌌다. 상품은 황소 한 마리!', game: '씨름판에 오른다' },
-    AUTUMN: { name: '한가위 무예 겨루기', scene: '추석 장터에 무예 겨루기 판이 섰다. 이긴 자에게 쌀 한 섬.', game: '겨루기 판에 나선다' },
-    WINTER: { name: '정월 대보름 석전(石戰)', scene: '두 마을 장정들이 개울을 사이에 두고 돌팔매 싸움을 벌인다. 해마다 다치는 사람이 나온다.', game: '우리 마을 편에 선다' },
+    SPRING: [
+      { name: '삼짇날 화전놀이와 편사(便射)', scene: '진달래가 핀 산자락에서 고을 활량들이 편을 갈라 활을 쏜다.', game: '활쏘기 편사에 나간다' },
+      { name: '초파일 저녁의 택견판', scene: '연등이 걸린 저녁, 장터 공터에서 젊은이들이 택견 겨루기를 벌인다. 발길질 하나에 탄성과 웃음이 터진다.', game: '택견판에 뛰어든다' },
+    ],
+    SUMMER: [
+      { name: '단오 씨름판', scene: '창포물에 머리 감은 사람들이 모래판을 둘러쌌다. 상품은 황소 한 마리!', game: '씨름판에 오른다' },
+      { name: '백중날 들돌 들기', scene: '김매기를 마친 머슴들이 백중날 하루를 논다. 술동이 옆에서 둥근 들돌을 들어 올리는 내기가 벌어졌다.', game: '들돌을 들어 올린다' },
+    ],
+    AUTUMN: [
+      { name: '한가위 무예 겨루기', scene: '추석 장터에 무예 겨루기 판이 섰다. 이긴 자에게 쌀 한 섬.', game: '겨루기 판에 나선다' },
+      { name: '가을걷이 끝의 줄다리기', scene: '가을걷이를 마친 두 마을이 볏짚으로 꼰 굵은 줄을 사이에 두고 마주 섰다. 풍물패가 줄 위에서 장단을 친다.', game: '우리 마을 줄 앞머리에 선다' },
+    ],
+    WINTER: [
+      {
+        name: '정월 대보름 석전(石戰)',
+        scene: '두 마을 장정들이 개울을 사이에 두고 돌팔매 싸움을 벌인다. 해마다 다치는 사람이 나온다.',
+        game: '우리 마을 편에 선다',
+        risky: {
+          win: '날아드는 돌을 칼집으로 쳐내며 앞장서자 우리 마을이 이겼다. 이마가 깨졌지만 고을의 영웅이 되었다.',
+          lose: '돌 하나가 정통으로 날아들었다. 정신을 차려 보니 누워 있었다. (건강 -14)',
+        },
+      },
+      { name: '설날 연싸움', scene: '설 무렵 언덕마다 방패연이 떴다. 사기 가루를 먹인 연줄로 남의 연줄을 끊는 연싸움이 한창이다.', game: '연싸움에 끼어든다' },
+    ],
   },
   CHINA: {
-    SPRING: { name: '청명 연날리기', scene: '청명절 들판, 하늘 가득 연이 떠 있다. 연줄 끊기 시합이 한창이다.', game: '연줄 끊기에 끼어든다' },
-    SUMMER: { name: '단오 용선 경조', scene: '북소리에 맞춰 용머리 배들이 강을 가른다. 노잡이가 하나 모자란다고 아우성이다.', game: '노를 잡는다' },
-    AUTUMN: { name: '중추절 등롱 무예 시연', scene: '등롱이 걸린 광장에서 각 무관이 무예를 시연한다. 가장 화려한 곳에 제자가 몰린다.', game: '도장의 무예를 시연한다' },
-    WINTER: { name: '원소절 사자춤', scene: '정월 대보름, 사자춤 무리가 서로 높이 매단 청(靑)을 따려고 다툰다.', game: '사자춤 패를 이끈다' },
+    SPRING: [
+      { name: '청명 연날리기', scene: '청명절 들판, 하늘 가득 연이 떠 있다. 연줄 끊기 시합이 한창이다.', game: '연줄 끊기에 끼어든다' },
+      { name: '청명 축국(蹴鞠) 시합', scene: '들판에 축국 판이 섰다. 가죽 공을 땅에 떨어뜨리지 않고 차올리는 솜씨를 겨룬다.', game: '공을 받아 찬다' },
+    ],
+    SUMMER: [
+      { name: '단오 용선 경조', scene: '북소리에 맞춰 용머리 배들이 강을 가른다. 노잡이가 하나 모자란다고 아우성이다.', game: '노를 잡는다' },
+      { name: '묘회(廟會)의 각저(角抵) 시합', scene: '사당 앞 묘회 마당에 각저 판이 섰다. 웃통을 벗은 장정들이 서로 허리띠를 잡고 맞붙는다.', game: '각저 판에 오른다' },
+    ],
+    AUTUMN: [
+      { name: '중추절 등롱 무예 시연', scene: '등롱이 걸린 광장에서 각 무관이 무예를 시연한다. 가장 화려한 곳에 제자가 몰린다.', game: '도장의 무예를 시연한다' },
+      { name: '중양절 등고(登高) 내기', scene: '중양절, 사람들이 수유(茱萸) 가지를 꽂고 산에 오른다. 젊은이들이 누가 먼저 꼭대기에 닿나 내기를 걸었다.', game: '등고 내기에 낀다' },
+    ],
+    WINTER: [
+      { name: '원소절 사자춤', scene: '정월 대보름, 사자춤 무리가 서로 높이 매단 청(靑)을 따려고 다툰다.', game: '사자춤 패를 이끈다' },
+      { name: '언 강 위의 빙희(氷嬉)', scene: '꽁꽁 언 강 위에서 썰매 끌기와 얼음 지치기 내기가 벌어졌다. 넘어지는 사람마다 웃음이 터진다.', game: '얼음 위 내기에 나선다' },
+    ],
   },
   JAPAN: {
-    SPRING: { name: '하나미 봉납 시합', scene: '벚꽃 아래 신사 경내에서 봉납 무술 시합이 열린다.', game: '봉납 시합에 나간다' },
-    SUMMER: { name: '마쓰리와 하나비', scene: '가마를 멘 사내들의 함성, 강 위로 터지는 불꽃. 노점 거리에 사람이 넘친다.', game: '가마를 멘다' },
-    AUTUMN: { name: '쓰키미와 야부사메', scene: '보름달 아래, 말을 달리며 과녁을 쏘는 야부사메 시연이 열린다.', game: '과녁 앞에 선다' },
-    WINTER: { name: '간게이코(寒稽古)', scene: '한겨울 새벽, 도장마다 맨발로 얼음물을 끼얹으며 수련하는 간게이코가 시작되었다.', game: '제자들과 간게이코를 한다' },
+    SPRING: [
+      { name: '하나미 봉납 시합', scene: '벚꽃 아래 신사 경내에서 봉납 무술 시합이 열린다.', game: '봉납 시합에 나간다' },
+      { name: '봄 신사의 봉납 스모', scene: '신사 경내에 흙 씨름판이 섰다. 마을 장사들이 신에게 바치는 스모를 겨룬다.', game: '도효(土俵)에 오른다' },
+    ],
+    SUMMER: [
+      { name: '마쓰리와 하나비', scene: '가마를 멘 사내들의 함성, 강 위로 터지는 불꽃. 노점 거리에 사람이 넘친다.', game: '가마를 멘다' },
+      { name: '강변의 수련(水練) 내기', scene: '한여름 강변에서 헤엄 수련 시연이 열렸다. 무가 자제들이 갑옷 차림으로 강 건너기 내기를 한다.', game: '물에 뛰어든다' },
+    ],
+    AUTUMN: [
+      { name: '쓰키미와 야부사메', scene: '보름달 아래, 말을 달리며 과녁을 쏘는 야부사메 시연이 열린다.', game: '과녁 앞에 선다' },
+      {
+        name: '추수 마쓰리의 가마 싸움',
+        scene: '추수 마쓰리, 두 마을의 가마가 길 한복판에서 맞부딪쳤다. 먼저 밀려나는 쪽이 지는 가마 싸움이다.',
+        game: '가마 앞채를 멘다',
+        risky: {
+          win: '어깨가 부서질 듯했지만 끝까지 버텨 상대 가마를 밀어냈다. 마을 사람들이 헹가래를 쳤다.',
+          lose: '맞부딪치는 순간 가마채에 옆구리를 받혔다. 숨이 턱 막혔다. (건강 -14)',
+        },
+      },
+    ],
+    WINTER: [
+      { name: '간게이코(寒稽古)', scene: '한겨울 새벽, 도장마다 맨발로 얼음물을 끼얹으며 수련하는 간게이코가 시작되었다.', game: '제자들과 간게이코를 한다' },
+      { name: '정월 가가미비라키(鏡開き)', scene: '정월 열하루, 도장마다 거울떡을 깨며 새해 첫 수련을 연다. 이웃 도장주들이 서로의 시연을 보러 모였다.', game: '첫 시연 대련에 나선다' },
+    ],
   },
 };
 const festival: JourneyEventDef = {
@@ -352,7 +428,7 @@ const festival: JourneyEventDef = {
   kind: 'HOME',
   cond: (s) => s.turn >= 3,
   build: (s) => {
-    const f = FEST[s.country][s.season];
+    const f = pickFresh(s, 'home_festival', FEST[s.country][s.season].map((x, i) => ({ ...x, id: `${s.season}_${i}` })));
     const p = clampP(0.35 + (s.stats.str + s.stats.agi) * 0.004);
     return {
       title: f.name,
@@ -360,11 +436,11 @@ const festival: JourneyEventDef = {
       narration: f.scene,
       script: [N(f.scene), P('구경꾼', `${s.sectName} 도장주도 한판 하시려오? 다들 보고 싶어 하는데!`)],
       options: [
-        { id: 'join', label: f.game, hint: `이길 확률 약 ${pct(p)} · 명성 · 입문자` },
+        { id: 'join', label: f.game, hint: f.risky ? `이길 확률 약 ${pct(p)} · 명성 · 지면 크게 다친다` : `이길 확률 약 ${pct(p)} · 명성 · 입문자` },
         { id: 'demo', label: '제자들을 앞세워 도장 시연을 한다', hint: '제자 충성 · 입문자' },
         { id: 'watch', label: '구경만 하고 술 한잔한다', hint: '건강 회복' },
       ],
-      meta: { p, fname: f.name },
+      meta: { p, fname: f.name, vkey: f.id },
     };
   },
   resolve: (s, opt, c) => {
@@ -381,9 +457,10 @@ const festival: JourneyEventDef = {
       return say(n, [['나레이션', `제자들이 한 몸처럼 움직이자 박수가 쏟아졌다. (명성 +12)${extra}`]]);
     }
     const won = chance(Number(c.data?.p));
-    if (s.country === 'KOREA' && s.season === 'WINTER') {
+    const fest = (FEST[s.country]?.[s.season] || []).find((x) => x.name === c.data?.fname);
+    if (fest?.risky) {
       const n = won ? addRep(addFame(addHealth(s, -6), 18), { virtue: 4 }) : addHealth(s, -14);
-      return say(n, [['나레이션', won ? '날아드는 돌을 칼집으로 쳐내며 앞장서자 우리 마을이 이겼다. 이마가 깨졌지만 고을의 영웅이 되었다.' : '돌 하나가 정통으로 날아들었다. 정신을 차려 보니 누워 있었다. (건강 -14)']]);
+      return say(n, [['나레이션', won ? fest.risky.win : fest.risky.lose]]);
     }
     const n = won ? addMoney(addFame(s, 22), 30) : addFame(s, -3);
     return say(n, [['나레이션', won ? `${String(c.data?.fname)}에서 이겼다! 상품과 함께 「${s.sectName}」의 이름이 고을에 퍼졌다. (명성 +22)` : '아깝게 졌다. 구경꾼들은 그래도 박수를 쳐 주었다.']]);
@@ -405,20 +482,20 @@ const patron: JourneyEventDef = {
   cooldown: 24,
   cond: (s) => s.fame >= 150,
   build: (s) => {
-    const pt = rand(PATRONS);
+    const pt = pickFresh(s, 'home_patron', PATRONS.map((x) => ({ ...x, id: x.k })));
     const who = pt.who[s.country];
     return {
       title: `후원 제안 — ${who}`,
       category: 'LIFE',
       sceneActor: 'MERCHANT',
       narration: `${josa(who, '이가')} 비단 보따리를 들고 찾아왔다.`,
-      script: [N(`${josa(who, '이가')} 비단 보따리를 마루에 내려놓는다. 은자가 반짝인다.`), P(who, `해마다 ${pt.offer}${cur(s)}을 대겠소. ${pt.string}`, '부채를 부치며')],
+      script: [N(`${josa(who, '이가')} 비단 보따리를 마루에 내려놓는다. 은자가 반짝인다.`), P(who, `해마다 ${josa(`${pt.offer}${cur(s)}`, '을를')} 대겠소. ${pt.string}`, '부채를 부치며')],
       options: [
         { id: 'accept', label: '받는다', hint: `+${pt.offer}${cur(s)} · 세평 변화` },
         { id: 'haggle', label: '조건을 바꾸자고 흥정한다', hint: `통찰 판정 약 ${pct(0.3 + s.stats.ins * 0.006)}` },
         { id: 'refuse', label: '도장의 칼은 팔지 않는다', hint: '구도·인덕' },
       ],
-      meta: { k: pt.k, who, offer: pt.offer, rep: pt.rep },
+      meta: { k: pt.k, who, offer: pt.offer, rep: pt.rep, vkey: pt.k },
     };
   },
   resolve: (s, opt, c) => {
@@ -434,35 +511,71 @@ const patron: JourneyEventDef = {
     let n = addMoney(s, offer);
     n = addRep(n, { [rep]: 12 } as Partial<GameState['reputation']>);
     if (c.data?.k === 'noble') n = addEcho(n, { key: 'noble_debt', minYears: 2, maxYears: 5, channel: 'HOME', bornText: '세도가의 돈을 받고 「묻지 않는 칼」을 약속했다' });
-    return say(n, [['나레이션', `${offer}${cur(n)}이 들어왔다. 도장 곳간이 넉넉해졌다. 하지만 약속은 약속이다.`]]);
+    return say(n, [['나레이션', `${josa(`${offer}${cur(n)}`, '이가')} 들어왔다. 도장 곳간이 넉넉해졌다. 하지만 약속은 약속이다.`]]);
   },
 };
 
 // ───────── 6. 이웃 도장과의 분쟁 ─────────
+// 시비의 씨앗마다 제목이 다르다 — 같은 문파와 또 부딪쳐도 「또 그 분쟁」으로 읽히지 않게, 최근의 씨앗은 피해서 고른다.
+const NEIGHBOR_CAUSES: Array<{ id: string; when?: (s: GameState) => boolean; title: (name: string) => string; text: (s: GameState, name: string) => string; line: string; settle: (name: string) => string }> = [
+  {
+    id: 'land',
+    title: (name) => `뒷산에 박힌 ${name}의 말뚝`,
+    text: (_s, name) => `${josa(name, '이가')} 도장 뒷산 땅이 원래 자기네 것이라며 말뚝을 박아 놓았다.`,
+    line: '땅문서에 이름이 없으면 임자 없는 땅이지. 억울하면 칼로 증명하시든가.',
+    settle: (name) => `${josa(name, '은는')} 말뚝을 뽑아 갔다.`,
+  },
+  {
+    id: 'poach',
+    title: (name) => `제자를 빼 가려는 ${name}`,
+    text: (_s, name) => `${josa(name, '이가')} 우리 문하생에게 「월사금 반값」을 미끼로 옮겨 오라 꼬드겼다.`,
+    line: '제 발로 오겠다는 걸 어쩌겠소? 억울하면 칼로 증명하시든가.',
+    settle: (name) => `${josa(name, '은는')} 다시는 우리 문하생에게 손을 뻗지 않겠다고 약조했다.`,
+  },
+  {
+    id: 'slander',
+    title: (name) => `장터에 나붙은 ${name}의 방(榜)`,
+    text: (s, name) => `${josa(name, '이가')} 「${s.sectName}의 무예는 춤사위」라는 방을 장터에 붙였다.`,
+    line: '틀린 말 했소? 억울하면 칼로 증명하시든가.',
+    settle: (name) => `${josa(name, '은는')} 장터의 방을 제 손으로 떼어 갔다.`,
+  },
+  {
+    id: 'smash',
+    title: (name) => `부서진 목인장 — ${name}의 소행`,
+    text: (_s, name) => `밤사이 연무장 목인장이 도끼에 찍혀 쓰러져 있었다. 담 밑에 떨어진 띠에는 ${name}의 표식이 수놓여 있다.`,
+    line: '띠 하나로 사람을 잡겠다? 억울하면 칼로 증명하시든가.',
+    settle: (name) => `${josa(name, '은는')} 목인장 값을 물어 주었다.`,
+  },
+  {
+    id: 'brawl',
+    when: (s) => alive(s).length > 0,
+    title: (name) => `장터 패싸움 — ${name} 문하생들`,
+    text: (_s, name) => `${name}의 문하생들이 장터 한복판에서 우리 제자들과 패싸움을 벌였다. 서로 상대가 먼저 손을 댔다고 우긴다.`,
+    line: '우리 애들 팔이 부러졌소. 이건 칼로 갚아야겠소.',
+    settle: (name) => `양쪽 문하생들이 어른들 앞에서 서로 술을 따랐다. ${josa(name, '은는')} 다친 아이들 약값을 반씩 내자고 했다.`,
+  },
+];
 const neighbor: JourneyEventDef = {
   key: 'home_neighbor',
   kind: 'HOME',
   cond: (s) => s.turn >= 8,
   build: (s) => {
     const sect = metSects(s).length ? rand(metSects(s)) : null;
-    const name = sect?.name || `${makePersonName(s.country).slice(0, 2)} 도장`;
-    const cause = rand([
-      { k: 'land', text: '도장 뒷산 땅이 원래 자기네 것이라며 말뚝을 박아 놓았다.' },
-      { k: 'poach', text: '우리 문하생에게 「월사금 반값」을 미끼로 옮겨 오라 꼬드겼다.' },
-      { k: 'slander', text: `「${s.sectName}의 무예는 춤사위」라는 방을 장터에 붙였다.` },
-    ]);
+    const name = sect?.name || `${makePersonName(s.country, takenNames(s)).slice(0, 2)} 도장`;
+    const cause = pickFresh(s, 'home_neighbor', NEIGHBOR_CAUSES);
+    const text = cause.text(s, name);
     return {
-      title: `${josa(name, '과와')}의 분쟁`,
+      title: cause.title(name),
       category: 'DUEL',
       sceneActor: 'ENEMY',
-      narration: `${josa(name, '이가')} ${cause.text}`,
-      script: [N(`${josa(name, '이가')} ${cause.text}`), P(`${name} 사범`, '억울하면 칼로 증명하시든가.', '비웃으며', 'ANGRY')],
+      narration: text,
+      script: [N(text), P(`${name} 사범`, cause.line, '비웃으며', 'ANGRY')],
       options: [
         { id: 'duel', label: '공개 비무로 결판낸다', hint: '비무' },
         { id: 'talk', label: '고을 어른들 앞에서 시비를 가린다', hint: `통찰 판정 약 ${pct(0.35 + s.stats.ins * 0.005 + s.reputation.virtue * 0.003)}` },
         { id: 'ignore', label: '무시한다', hint: '명성 -10' },
       ],
-      meta: { name, sid: sect?.id || '', k: cause.k },
+      meta: { name, sid: sect?.id || '', k: cause.id, vkey: cause.id },
     };
   },
   resolve: (s, opt, c) => {
@@ -472,7 +585,7 @@ const neighbor: JourneyEventDef = {
       const ok = chance(clampP(0.35 + s.stats.ins * 0.005 + s.reputation.virtue * 0.003));
       let n = ok ? addRep(addFame(s, 15), { virtue: 4 }) : addFame(s, -6);
       if (c.data?.sid) n = adjustRelation(n, String(c.data.sid), ok ? 4 : -6, ok ? '고을 어른들 앞에서 시비를 가렸다' : '시비가 흐지부지 끝났다');
-      return say(n, [['나레이션', ok ? `고을 어른들이 ${s.sectName}의 손을 들어 주었다. ${josa(name, '은는')} 말뚝을 뽑아 갔다.` : '어른들은 이쪽저쪽 말을 다 듣더니 「알아서들 하라」며 자리를 떴다.']]);
+      return say(n, [['나레이션', ok ? `고을 어른들이 ${s.sectName}의 손을 들어 주었다. ${(NEIGHBOR_CAUSES.find((x) => x.id === c.data?.vkey) || NEIGHBOR_CAUSES[0]).settle(name)}` : '어른들은 이쪽저쪽 말을 다 듣더니 「알아서들 하라」며 자리를 떴다.']]);
     }
     return journeyBattle(s, c, opt, {
       title: `${name} 사범과의 공개 비무`,
@@ -495,53 +608,186 @@ const neighbor: JourneyEventDef = {
 };
 
 // ───────── 7. 선비들의 비웃음 ─────────
+// 붓과 칼의 시비는 장면을 바꿔 가며 온다 — 길에서의 비웃음, 정자의 시회, 하마비 앞, 연명 진정. 효과는 같고 이야기만 다르다.
+interface ScholarScene {
+  id: string;
+  title: (s: GameState) => string;
+  narration: string;
+  open: (s: GameState) => string;
+  line: (s: GameState) => string;
+  dir: string;
+  debate: string;
+  bow: string;
+  scare: string;
+  win: string;
+  lose: string;
+  bowText: string;
+  scareText: string;
+}
+const SCHOLAR_SCENES: ScholarScene[] = [
+  {
+    id: 'sneer',
+    title: (s) => byCountry(s, '서원 유생들의 비웃음', '서원 학자들의 조롱', '주자학 유학자의 훈계'),
+    narration: '도포 자락을 날리는 선비들이 도장 앞을 지나며 혀를 찬다.',
+    open: () => '도포 차림의 선비 몇이 도장 앞을 지나다 걸음을 멈춘다.',
+    line: (s) => `${byCountry(s, '군자는 붓을 들지 칼을 들지 않소.', '문(文)이 있어야 나라가 서오. 칼은 오랑캐나 쓰는 것이지.', '무사도 이제 학문을 해야 하오. 칼만 휘두르는 건 시대에 뒤처진 짓이오.')} 쯧쯧.`,
+    dir: '부채를 탁 접으며',
+    debate: '「문무겸전」을 들어 논쟁한다',
+    bow: '허허 웃으며 고개를 숙인다',
+    scare: '말없이 칼집으로 대문 기둥을 친다',
+    win: '「무예도 예(禮)의 하나」라는 말에 선비들이 말문이 막혔다. 그중 하나는 이튿날 다시 찾아와 활을 배우고 싶다 했다.',
+    lose: '선비들의 말재간을 당해 낼 수 없었다. 진 기분이 오래 갔다.',
+    bowText: '선비들이 머쓱해하며 지나갔다. 마음은 고요했다.',
+    scareText: '쾅! 기둥에 금이 갔다. 선비들이 도포 자락을 붙잡고 줄행랑을 쳤다.',
+  },
+  {
+    id: 'poem',
+    title: () => '시회(詩會)의 놀림거리',
+    narration: '정자에서 시회를 열던 선비들이 지나가는 도장주를 불러 세웠다.',
+    open: () => '정자에서 시회를 열던 선비들이 지나가는 도장주를 불러 세웠다. 운(韻)을 하나 띄우더니 대구를 지어 보라며 킥킥거린다.',
+    line: () => '칼 쓰는 분도 시 한 수쯤은 지으시겠지요? 운은 「검(劍)」 자로 드리리다.',
+    dir: '붓을 내밀며',
+    debate: '즉석에서 대구를 지어 맞받아친다',
+    bow: '「붓은 그대들 몫이오」 하고 웃으며 지나간다',
+    scare: '말없이 칼을 뽑아 정자 기둥에 한 글자를 새긴다',
+    win: '「칼끝에 맺힌 이슬은 붓끝의 먹과 같다」 — 지어 놓고 보니 그럴듯했다. 정자가 조용해지더니, 나이 든 선비 하나가 무릎을 쳤다.',
+    lose: '운을 맞추다 혀가 꼬였다. 정자에서 터진 웃음소리가 도장까지 따라왔다.',
+    bowText: '등 뒤의 킥킥거림이 이상하게 아무렇지 않았다. 마음은 고요했다.',
+    scareText: '정자 기둥에 「劍」 한 자가 깊이 새겨졌다. 운은 그것으로 맞춰졌다. 선비들이 슬금슬금 자리를 떴다.',
+  },
+  {
+    id: 'hamabi',
+    title: (s) => byCountry(s, '하마비(下馬碑) 앞의 시비', '문묘(文廟) 앞의 시비', '번교(藩校) 문 앞의 시비'),
+    narration: '학당 앞을 지나는데 젊은 선비 하나가 길을 막아선다.',
+    open: (s) =>
+      byCountry(
+        s,
+        '향교 앞을 지나는데 유생 하나가 길을 막아선다. 하마비 앞에서 칼을 찬 채 지나가는 것은 성현께 무례라는 것이다.',
+        '문묘 앞을 지나는데 서생 하나가 길을 막아선다. 성현의 사당 앞에서 칼을 찬 채 지나가는 것은 무례라는 것이다.',
+        '번교 앞을 지나는데 젊은 유학자 하나가 길을 막아선다. 성현의 위패를 모신 문 앞에서 칼집 소리를 내며 지나가는 것은 무례라는 것이다.'
+      ),
+    line: () => '여기가 어디라고 칼을 차고 지나가시오? 칼을 풀고 걸어가시오!',
+    dir: '팔을 벌려 길을 막으며',
+    debate: '「예(禮)는 마음에 있지 칼집에 있지 않다」고 반박한다',
+    bow: '말없이 칼을 풀어 손에 들고 지나간다',
+    scare: '칼자루에 손을 얹은 채 한 걸음 다가선다',
+    win: '「칼을 풀어야 예라면, 성현의 마음이 칼집만도 못하다는 말이오?」 유생이 얼굴을 붉히고 물러섰다. 며칠 뒤 그 학당의 어른이 사람을 보내 정중히 사과했다.',
+    lose: '말이 길어질수록 구경꾼이 늘었다. 결국 칼을 풀고서야 지나갈 수 있었다.',
+    bowText: '칼을 풀어 들고 지나가자 길을 막던 선비가 머쓱하게 비켜섰다. 마음은 고요했다.',
+    scareText: '한 걸음 다가서자 선비가 뒷걸음질 치다 비석에 머리를 찧었다. 구경꾼들 사이에서 웃음이 터졌다.',
+  },
+  {
+    id: 'petition',
+    title: () => '도장을 옮기라는 연명(聯名)',
+    narration: '고을 유생들이 도장을 옮기라는 연명 진정을 돌리고 있다.',
+    open: () => '고을 유생들이 연명으로 진정서를 돌린다는 말이 들렸다. 서당 옆에 칼 쓰는 도장이 있으면 아이들 마음이 거칠어진다는 것이다. 그 우두머리가 직접 찾아와 통보했다.',
+    line: () => '이 고을의 풍속을 위해서요. 사범님도 학문의 귀함은 아시겠지요?',
+    dir: '진정서를 펼쳐 보이며',
+    debate: '서당 아이들을 불러 「칼이 무엇을 가르치는지」 보여 주자고 맞선다',
+    bow: '「학문이 귀한 줄은 안다」며 고개를 숙인다',
+    scare: '진정서를 받아 들고 그 자리에서 반으로 벤다',
+    win: '서당 아이들이 연무장에서 하루를 보냈다. 이튿날 진정서에서 이름 몇 개가 지워졌고, 진정은 흐지부지되었다.',
+    lose: '진정서는 관아까지 올라갔다. 「알아서 조용히 하라」는 전갈이 돌아왔다.',
+    bowText: '기세가 꺾인 유생들이 진정서를 슬그머니 접었다. 마음은 고요했다.',
+    scareText: '반으로 갈린 진정서가 마당에 떨어졌다. 그 뒤로 진정 이야기는 쑥 들어갔다.',
+  },
+];
 const scholars: JourneyEventDef = {
   key: 'home_scholars',
   kind: 'HOME',
   cond: (s) => s.country !== 'JAPAN' || s.year >= 1787,
-  build: (s) => ({
-    title: byCountry(s, '서원 유생들의 비웃음', '서원 학자들의 조롱', '주자학 유학자의 훈계'),
-    category: 'LIFE',
-    narration: '도포 자락을 날리는 선비들이 도장 앞을 지나며 혀를 찬다.',
-    script: [N('도포 차림의 선비 몇이 도장 앞을 지나다 걸음을 멈춘다.'), P('젊은 선비', `${byCountry(s, '군자는 붓을 들지 칼을 들지 않소.', '문(文)이 있어야 나라가 서오. 칼은 오랑캐나 쓰는 것이지.', '무사도 이제 학문을 해야 하오. 칼만 휘두르는 건 시대에 뒤처진 짓이오.')} 쯧쯧.`, '부채를 탁 접으며')],
-    options: [
-      { id: 'debate', label: '「문무겸전」을 들어 논쟁한다', hint: `통찰 판정 약 ${pct(0.3 + s.stats.ins * 0.006)}` },
-      { id: 'bow', label: '허허 웃으며 고개를 숙인다', hint: '구도' },
-      { id: 'scare', label: '말없이 칼집으로 대문 기둥을 친다', hint: '살기' },
-    ],
-  }),
-  resolve: (s, opt) => {
-    if (opt === 'bow') return say(addRep(addStats(s, { wil: 1 }), { ascetic: 5 }), [['나레이션', '선비들이 머쓱해하며 지나갔다. 마음은 고요했다.']]);
-    if (opt === 'scare') return say(addRep(s, { ruthless: 6 }), [['나레이션', '쾅! 기둥에 금이 갔다. 선비들이 도포 자락을 붙잡고 줄행랑을 쳤다.']]);
+  build: (s) => {
+    const sc = pickFresh(s, 'home_scholars', SCHOLAR_SCENES);
+    return {
+      title: sc.title(s),
+      category: 'LIFE',
+      speaker: '젊은 선비',
+      narration: sc.narration,
+      script: [N(sc.open(s)), P('젊은 선비', sc.line(s), sc.dir)],
+      options: [
+        { id: 'debate', label: sc.debate, hint: `통찰 판정 약 ${pct(0.3 + s.stats.ins * 0.006)}` },
+        { id: 'bow', label: sc.bow, hint: '구도' },
+        { id: 'scare', label: sc.scare, hint: '살기' },
+      ],
+      meta: { vkey: sc.id },
+    };
+  },
+  resolve: (s, opt, c) => {
+    const sc = SCHOLAR_SCENES.find((x) => x.id === c.data?.vkey) || SCHOLAR_SCENES[0];
+    if (opt === 'bow') return say(addRep(addStats(s, { wil: 1 }), { ascetic: 5 }), [['나레이션', sc.bowText]]);
+    if (opt === 'scare') return say(addRep(s, { ruthless: 6 }), [['나레이션', sc.scareText]]);
     const ok = chance(clampP(0.3 + s.stats.ins * 0.006));
-    return say(ok ? addRep(addFame(addStats(s, { ins: 2 }), 12), { virtue: 4 }) : addFame(s, -5), [['나레이션', ok ? '「무예도 예(禮)의 하나」라는 말에 선비들이 말문이 막혔다. 그중 하나는 이튿날 다시 찾아와 활을 배우고 싶다 했다.' : '선비들의 말재간을 당해 낼 수 없었다. 진 기분이 오래 갔다.']]);
+    return say(ok ? addRep(addFame(addStats(s, { ins: 2 }), 12), { virtue: 4 }) : addFame(s, -5), [['나레이션', ok ? sc.win : sc.lose]]);
   },
 };
 
 // ───────── 8. 옛 친구의 부탁 — 빌려준 돈은 돌아올까 ─────────
+// 동무가 찾아온 사연은 여러 가지다. 빌려준 돈의 메아리(loan_friend)는 사연과 상관없이 같다.
+const FRIEND_STORIES: Array<{ id: string; title: (s: GameState, name: string) => string; open: (s: GameState, name: string) => string; line: (s: GameState) => string; dir: string; born: (s: GameState) => string }> = [
+  {
+    id: 'trade',
+    title: (_s, name) => `어릴 적 동무 ${name}`,
+    open: (_s, name) => `어릴 적 같은 서당에 다니던 ${josa(name, '이가')} 남루한 차림으로 찾아왔다.`,
+    line: (s) => `장사를 하다 망했네… 100${cur(s)}만 빌려주게. ${byCountry(s, '송도', '광주', '오사카')}에 가서 다시 일어서겠네. 꼭 갚지.`,
+    dir: '머리를 긁으며',
+    born: () => '망해서 찾아온',
+  },
+  {
+    id: 'flood',
+    title: (_s, name) => `물난리에 집을 잃은 동무 ${name}`,
+    open: (_s, name) => `어릴 적 같은 냇가에서 멱을 감던 ${josa(name, '이가')} 젖은 봇짐 하나만 메고 찾아왔다.`,
+    line: (s) => `지난 장마에 집이 통째로 떠내려갔네. 100${cur(s)}만 빌려주게. 땅 한 뙈기 얻어 다시 일어서겠네. 꼭 갚지.`,
+    dir: '봇짐을 내려놓으며',
+    born: () => '물난리에 집을 잃고 찾아온',
+  },
+  {
+    id: 'surety',
+    title: (_s, name) => `빚보증에 무너진 동무 ${name}`,
+    open: (_s, name) => `어릴 적 단짝이던 ${josa(name, '이가')} 며칠은 굶은 얼굴로 찾아왔다.`,
+    line: (s) => `친척 빚보증을 섰다가 알거지가 됐네… 100${cur(s)}만 빌려주게. 장사 밑천만 마련하면 꼭 갚겠네.`,
+    dir: '고개를 떨구며',
+    born: () => '빚보증에 무너져 찾아온',
+  },
+  {
+    id: 'exam',
+    title: (s, name) => byCountry(s, `과거에 매달린 동무 ${name}`, `과거에 매달린 동무 ${name}`, `벼슬길을 찾는 동무 ${name}`),
+    open: (s, name) => `어릴 적 같은 서당에서 글을 읽던 ${josa(name, '이가')} 해진 ${byCountry(s, '도포', '장삼', '하카마')} 차림으로 찾아왔다.`,
+    line: (s) =>
+      byCountry(
+        s,
+        `과거에 일곱 번 떨어졌네. 이번이 마지막일세. 한양 올라갈 노자 100${cur(s)}만 빌려주게. 붙으면 꼭 갚지.`,
+        `과거에 일곱 번 떨어졌네. 이번이 마지막일세. 북경 올라갈 노자 100${cur(s)}만 빌려주게. 붙으면 꼭 갚지.`,
+        `에도의 어느 번저(藩邸)에 자리가 났다네. 올라갈 노자 100${cur(s)}만 빌려주게. 자리만 잡으면 꼭 갚지.`
+      ),
+    dir: '해진 소매를 만지작거리며',
+    born: (s) => byCountry(s, '과거 길 노자를 빌리러 온', '과거 길 노자를 빌리러 온', '벼슬길 노자를 빌리러 온'),
+  },
+];
 const oldFriend: JourneyEventDef = {
   key: 'home_old_friend',
   kind: 'HOME',
   cond: (s) => s.turn >= 10 && !(s.flags.echoes || []).some((e) => e.key === 'loan_friend'),
   build: (s) => {
-    const name = makePersonName(s.country);
+    const name = makePersonName(s.country, takenNames(s));
+    const st = pickFresh(s, 'home_old_friend', FRIEND_STORIES);
     return {
-      title: `어릴 적 동무 ${name}`,
+      title: st.title(s, name),
       category: 'LIFE',
-      narration: `어릴 적 같은 서당에 다니던 ${josa(name, '이가')} 남루한 차림으로 찾아왔다.`,
-      script: [N(`어릴 적 같은 서당에 다니던 ${josa(name, '이가')} 남루한 차림으로 찾아왔다.`), P(name, `장사를 하다 망했네… 100${cur(s)}만 빌려주게. ${byCountry(s, '송도', '광주', '오사카')}에 가서 다시 일어서겠네. 꼭 갚지.`, '머리를 긁으며')],
+      narration: st.open(s, name),
+      script: [N(st.open(s, name)), P(name, st.line(s), st.dir)],
       options: [
         { id: 'lend', label: `빌려준다 (100${cur(s)})`, disabled: s.money < 100, disabledReason: '돈이 부족하다' },
         { id: 'meal', label: '돈 대신 밥과 노자를 챙겨 준다', hint: '인덕' },
         { id: 'no', label: '거절한다' },
       ],
-      meta: { name },
+      meta: { name, vkey: st.id },
     };
   },
   resolve: (s, opt, c) => {
     const name = String(c.data?.name);
     if (opt === 'lend') {
-      const n = addEcho(addMoney(s, -100), { key: 'loan_friend', minYears: 2, maxYears: 6, channel: 'HOME', bornText: `망해서 찾아온 어릴 적 동무 ${name}에게 100${cur(s)}을 빌려주었다`, data: { name, honest: chance(0.55) ? 1 : 0 } });
+      const st = FRIEND_STORIES.find((x) => x.id === c.data?.vkey) || FRIEND_STORIES[0];
+      const n = addEcho(addMoney(s, -100), { key: 'loan_friend', minYears: 2, maxYears: 6, channel: 'HOME', bornText: `${st.born(s)} 어릴 적 동무 ${name}에게 ${josa(`100${cur(s)}`, '을를')} 빌려주었다`, data: { name, honest: chance(0.55) ? 1 : 0 } });
       return say(n, [[name, '자네 은혜, 꼭 갚겠네!'], ['나레이션', '떠나는 뒷모습이 가벼워 보였다. 돈이 돌아올지는 모르겠다.']]);
     }
     if (opt === 'meal') return say(addRep(addMoney(s, -10), { virtue: 5 }), [['나레이션', '국밥 한 그릇에 노자 몇 푼. 동무는 고개를 숙이고 떠났다.']]);
@@ -577,30 +823,88 @@ const echoLoan: JourneyEventDef = {
 };
 
 // ───────── 9. 관아 현상금 ─────────
+// 현상범 소식이 들어오는 길은 여러 가지다 — 장터의 방, 포졸의 부탁, 피해자의 호소, 제자가 본 얼굴.
+// 싸우러 온 사람이 아니면 대문으로 들어오는 사람도 그에 맞게 (category LIFE — 방문자가 검객 그림으로 나오지 않게).
+const copWord = (s: GameState) => byCountry(s, '포졸', '포쾌', '도신');
+const WANTED_SCENES: Array<{
+  id: string;
+  when?: (s: GameState) => boolean;
+  title: (name: string) => string;
+  hostile: boolean;
+  speaker: (s: GameState, dName: string) => string;
+  open: (s: GameState, name: string, crime: string, bounty: number, dName: string) => string;
+  line: (s: GameState) => string;
+  pass: (s: GameState) => string; // 「관아 일은 관아가 한다」를 골랐을 때
+}> = [
+  {
+    id: 'poster',
+    title: (name) => `현상금 방 — ${name}`,
+    hostile: true,
+    speaker: (s) => copWord(s),
+    open: (s, name, crime, bounty) => `장터 벽에 새 방이 붙었다. 「${crime}범 ${name}. 생포하거나 목을 가져오는 자에게 ${bounty}${cur(s)}.」`,
+    line: () => '놈이 뒷산 동굴에 숨어 있다는 제보가 있소만, 우리 힘으로는 엄두가 안 나오.',
+    pass: () => '방을 한 번 더 올려다보고 발길을 돌렸다. 며칠 뒤 방 위에 「잡았음」이라는 붉은 글씨가 덧쓰였는지는 알 수 없다.',
+  },
+  {
+    id: 'constable',
+    title: (name) => `관아의 부탁 — 현상범 ${name}`,
+    hostile: false,
+    speaker: (s) => `관아 ${copWord(s)}`,
+    open: (s, name, crime, bounty) => `${copWord(s)} 둘이 땀에 젖은 얼굴로 도장 대문을 두드렸다. ${crime}범 ${josa(name, '이가')} 고을 근처에 숨어들었다는 것이다. 현상금은 ${bounty}${cur(s)}.`,
+    line: () => '사범님 칼솜씨라면 놈을 잡을 수 있을 거요. 우리는… 지난번에 셋이 당했소.',
+    pass: (s) => `${copWord(s)}들이 어깨를 늘어뜨리고 돌아갔다.`,
+  },
+  {
+    id: 'victim',
+    title: (name) => `원수를 갚아 달라는 노파 — ${name}`,
+    hostile: false,
+    speaker: () => '울부짖는 노파',
+    open: (s, name, crime, bounty) => `허리 굽은 노파가 대문 앞에 엎드려 있다. ${crime}범 ${name}에게 아들을 잃었다고 한다. 관아에 걸린 현상금은 ${bounty}${cur(s)}.`,
+    line: () => '관아는 손을 놓았어요. 사범님, 제발 그놈을… 우리 아들 원수를…',
+    pass: () => '노파는 한참을 더 엎드려 있다가 지팡이를 짚고 일어섰다. 돌아가는 뒷모습이 작았다.',
+  },
+  {
+    id: 'sighting',
+    when: (s) => alive(s).length > 0,
+    title: (name) => `주막에서 본 얼굴 — 현상범 ${name}`,
+    hostile: false,
+    speaker: (_s, dName) => dName,
+    open: (s, name, crime, bounty, dName) => `장에 다녀온 ${josa(dName, '이가')} 헐레벌떡 뛰어 들어왔다. 방에 붙은 ${crime}범 ${josa(name, '과와')} 똑같은 얼굴을 주막에서 봤다는 것이다. 현상금은 ${bounty}${cur(s)}.`,
+    line: () => '틀림없습니다, 스승님! 뺨의 칼자국까지 똑같았습니다!',
+    pass: () => '「관아에 알리기나 하거라.」 제자가 아쉬운 얼굴로 관아 쪽으로 달려갔다.',
+  },
+];
 const wanted: JourneyEventDef = {
   key: 'home_wanted',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 70 ? 0.1 : s.age >= 60 ? 0.3 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 6,
   build: (s) => {
-    const name = makePersonName(s.country);
+    const name = makePersonName(s.country, takenNames(s));
     const crime = rand(['역참 습격', '관곡 탈취', '살인 강도', '사찰 방화']);
     const bounty = 60 + Math.floor(Math.random() * 80);
+    const sc = pickFresh(s, 'home_wanted', WANTED_SCENES);
+    const dName = alive(s).length ? rand(alive(s)).name : '문하생';
+    const speaker = sc.speaker(s, dName);
+    const text = sc.open(s, name, crime, bounty, dName);
     return {
-      title: `현상금 방 — ${name}`,
-      category: 'DUEL',
-      sceneActor: 'ENEMY',
-      narration: `장터 벽에 방이 붙었다. 「${crime}범 ${name}. 생포하거나 목을 가져오는 자에게 ${bounty}${cur(s)}.」`,
-      script: [N(`장터 벽에 새 방이 붙었다. 「${crime}범 ${name}. 생포하거나 목을 가져오는 자에게 ${bounty}${cur(s)}.」`), P('포졸', '놈이 뒷산 동굴에 숨어 있다는 제보가 있소만, 우리 힘으로는 엄두가 안 나오.')],
+      title: sc.title(name),
+      category: sc.hostile ? 'DUEL' : 'LIFE',
+      ...(sc.hostile ? { sceneActor: 'ENEMY' as const } : {}),
+      speaker,
+      narration: text,
+      script: [N(text), P(speaker, sc.line(s))],
       options: [
         { id: 'hunt', label: '잡으러 간다', hint: `비무 · 현상금 ${bounty}${cur(s)}` },
         { id: 'leave', label: '관아 일은 관아가 한다' },
       ],
-      meta: { name, bounty, crime },
+      meta: { name, bounty, crime, vkey: sc.id },
     };
   },
   resolve: (s, opt, c) =>
-    opt === 'hunt'
-      ? journeyBattle(s, c, opt, {
+    opt !== 'hunt'
+      ? say(s, [['나레이션', (WANTED_SCENES.find((x) => x.id === c.data?.vkey) || WANTED_SCENES[0]).pass(s)]])
+      : journeyBattle(s, c, opt, {
           title: `현상범 ${c.data?.name}`,
           subtitle: `${c.data?.crime}범`,
           name: String(c.data?.name),
@@ -612,12 +916,58 @@ const wanted: JourneyEventDef = {
           skills: byCountry(s, ['sk_kr_01', 'sk_kr_06', 'base_h_slash'], ['sk_cn_02', 'sk_cn_07', 'base_h_slash'], ['sk_jp_03', 'sk_jp_07', 'base_h_slash']),
           rewardMoney: Number(c.data?.bounty),
           rewardFame: 12,
-        })
-      : s,
-  onBattle: (s, _opt, won, c) => say(won ? addRep(s, { virtue: 4 }) : addHealth(s, -8), [['나레이션', won ? `${josa(String(c.data?.name ?? ''), '을를')} 포박해 관아에 넘겼다. 사또가 직접 나와 치하했다.` : '놈은 동굴 뒤쪽 구멍으로 달아났다. 팔에 칼자국 하나를 남기고.']]),
+        }),
+  onBattle: (s, _opt, won, c) => say(won ? addRep(s, { virtue: 4 }) : addHealth(s, -8), [['나레이션', won ? `${josa(String(c.data?.name ?? ''), '을를')} 포박해 관아에 넘겼다. ${josa(byCountry(s, '사또', '지현', '다이칸'), '이가')} 직접 나와 치하했다.` : '놈은 동굴 뒤쪽 구멍으로 달아났다. 팔에 칼자국 하나를 남기고.']]),
 };
 
 // ───────── 10. 떠돌이 병기상 ─────────
+// 칼을 팔러 오는 사람도 여러 부류다. 가짜(fake)의 정체도 파는 사람에 따라 다르다.
+const PEDDLER_SCENES: Array<{ id: string; title: string; speaker: string; narration: string; open: string; line: (s: GameState, price: number) => string; dir: string; caught: string; cheated: string }> = [
+  {
+    id: 'peddler',
+    title: '떠돌이 병기상',
+    speaker: '병기상',
+    narration: '등짐 가득 칼을 진 장사꾼이 마당에 짐을 풀었다.',
+    open: '등짐 가득 병기를 진 장사꾼이 마당에 보따리를 펼친다.',
+    line: (s, price) => `이건 명장이 직접 벼린 물건이오. ${price}${cur(s)}. 오늘만 이 값이오!`,
+    dir: '칼을 쓱 뽑으며',
+    caught: '칼날의 무늬가 그려 넣은 것이었다. 장사꾼이 얼굴을 붉히며 보따리를 쌌다.',
+    cheated: '며칠 뒤 칼날이 숫돌에 닿자마자 이가 빠졌다. 가짜였다.',
+  },
+  {
+    id: 'soldier',
+    title: '칼을 팔러 온 퇴역 군졸',
+    speaker: '늙은 퇴역 군졸',
+    narration: '낡은 군복 차림의 사내가 보자기에 싼 칼 한 자루를 내민다.',
+    open: '낡은 군복 차림의 사내가 마루 끝에 걸터앉아 보자기에 싼 칼 한 자루를 내민다.',
+    line: (s, price) => `변방에서 이십 년을 함께한 칼이오. 늙어서 쓸 데가 없어졌으니… ${price}${cur(s)}만 주시오.`,
+    dir: '칼집을 쓰다듬으며',
+    caught: '칼자루에 찍힌 군영 낙인이 엉터리였다. 사내가 고개를 푹 숙이고 돌아갔다. 군졸 행세를 한 장돌뱅이였다.',
+    cheated: '칼집을 열어 보니 칼날 절반이 녹슨 쇠를 덧댄 것이었다. 군졸 행세를 한 장돌뱅이에게 속았다.',
+  },
+  {
+    id: 'pawn',
+    title: '전당포에서 흘러나온 칼',
+    speaker: '전당포 주인',
+    narration: '전당포 주인이 기한이 지난 물건이라며 칼 한 자루를 들고 찾아왔다.',
+    open: '전당포 주인이 기한이 지난 물건이라며 칼 한 자루를 들고 찾아왔다. 칼집에 낯선 집안의 문장이 새겨져 있다.',
+    line: (s, price) => `주인이 찾으러 오지 않는 물건이오. 내력은 묻지 마시고… ${price}${cur(s)}에 넘기리다.`,
+    dir: '주판을 튕기며',
+    caught: '칼날 안쪽에 땜질 자국이 보였다. 전당포 주인이 헛기침을 하며 칼을 도로 싸 갔다.',
+    cheated: '부러진 칼을 땜질해 붙인 물건이었다. 첫 대련에서 두 동강이 났다.',
+  },
+  {
+    id: 'apprentice',
+    title: '대장간 도제가 몰래 친 칼',
+    speaker: '대장간 도제',
+    narration: '대장간 도제가 거적에 싼 칼 한 자루를 안고 쭈뼛쭈뼛 들어왔다.',
+    open: '대장간 도제가 거적에 싼 칼 한 자루를 안고 쭈뼛쭈뼛 들어왔다. 손등이 불똥 자국투성이다.',
+    line: (s, price) => `스승님 몰래 밤마다 두드린 칼입니다. 제 손으로 친 첫 칼인데… ${price}${cur(s)}만 받겠습니다.`,
+    dir: '거적을 펼치며',
+    caught: '담금질이 덜 된 칼이었다. 「석 달만 더 두드려 오너라」 하자 도제가 얼굴을 붉히며 돌아갔다.',
+    cheated: '담금질이 덜 된 칼이었다. 첫 대련에서 날이 휘었다. 도제의 첫 칼값을 치러 준 셈 치기로 했다.',
+  },
+];
 const peddler: JourneyEventDef = {
   key: 'home_peddler',
   kind: 'HOME',
@@ -627,61 +977,112 @@ const peddler: JourneyEventDef = {
     const id = pool.length ? rand(pool) : 'wp_bl_02';
     const fake = chance(0.25);
     const price = 90 + Math.floor(Math.random() * 90);
+    const sc = pickFresh(s, 'home_peddler', PEDDLER_SCENES);
     return {
-      title: '떠돌이 병기상',
+      title: sc.title,
       category: 'LIFE',
       sceneActor: 'MERCHANT',
-      narration: '등짐 가득 칼을 진 장사꾼이 마당에 짐을 풀었다.',
-      script: [N('등짐 가득 병기를 진 장사꾼이 마당에 보따리를 펼친다.'), P('병기상', `이건 명장이 직접 벼린 물건이오. ${price}${cur(s)}. 오늘만 이 값이오!`, '칼을 쓱 뽑으며')],
+      speaker: sc.speaker,
+      narration: sc.narration,
+      script: [N(sc.open), P(sc.speaker, sc.line(s, price), sc.dir)],
       options: [
         { id: 'buy', label: `산다 (${price}${cur(s)})`, disabled: s.money < price, disabledReason: '돈이 부족하다', hint: '진품일까?' },
         { id: 'inspect', label: '먼저 꼼꼼히 살펴본다', hint: `통찰 판정 약 ${pct(0.3 + s.stats.ins * 0.007)} — 가짜를 가려낸다` },
         { id: 'leave', label: '돌려보낸다' },
       ],
-      meta: { id, fake: fake ? 1 : 0, price },
+      meta: { id, fake: fake ? 1 : 0, price, vkey: sc.id },
     };
   },
   resolve: (s, opt, c) => {
     if (opt === 'leave') return s;
+    const sc = PEDDLER_SCENES.find((x) => x.id === c.data?.vkey) || PEDDLER_SCENES[0];
     const fake = !!c.data?.fake;
     const price = Number(c.data?.price);
     if (opt === 'inspect') {
       const ok = chance(clampP(0.3 + s.stats.ins * 0.007));
-      if (fake && ok) return say(addStats(s, { ins: 1 }), [['나레이션', '칼날의 무늬가 그려 넣은 것이었다. 장사꾼이 얼굴을 붉히며 보따리를 쌌다.']]);
+      if (fake && ok) return say(addStats(s, { ins: 1 }), [['나레이션', sc.caught]]);
       if (!fake && ok) {
         const g = giveWeapon(addMoney(s, -Math.round(price * 0.85)), String(c.data?.id));
         return say(g.state, [['나레이션', g.name ? `진품이다. 값을 조금 깎아 「${g.name}」을(를) 샀다.` : '좋은 물건이었지만 이미 가진 것과 같았다.']]);
       }
       return say(s, [['나레이션', '한참을 들여다봤지만 진짜인지 가짜인지 모르겠다. 사지 않기로 했다.']]);
     }
-    if (fake) return say(addMoney(s, -price), [['나레이션', `며칠 뒤 칼날이 숫돌에 닿자마자 이가 빠졌다. 가짜였다. (${price}${cur(s)} 날림)`]]);
+    if (fake) return say(addMoney(s, -price), [['나레이션', `${sc.cheated} (${price}${cur(s)} 날림)`]]);
     const g = giveWeapon(addMoney(s, -price), String(c.data?.id));
     return say(g.state, [['나레이션', g.name ? `「${g.name}」을(를) 샀다. 손에 착 감긴다.` : '이미 가진 물건이었다.']]);
   },
 };
 
 // ───────── 11. 담 너머 구경꾼 아이들 ─────────
+// 아이들이 도장을 기웃거리는 모습도 여러 가지다. 부르는 말은 도장주의 성별·나이에 맞춘다.
+const kidCall = (s: GameState) => (s.age >= 55 ? (s.gender === 'FEMALE' ? '할머니' : '할아버지') : s.gender === 'FEMALE' ? '아주머니' : '아저씨');
+const KID_SCENES: Array<{ id: string; title: string; narration: string; open: (s: GameState) => string; line: (s: GameState) => string; dir: string; shoo: string }> = [
+  {
+    id: 'wall',
+    title: '담 너머의 눈동자들',
+    narration: '수련 시간마다 담장 위로 동네 아이들 머리가 줄줄이 올라온다.',
+    open: () => '수련 시간마다 담장 위로 동네 아이들 머리가 쏙쏙 올라온다. 목검 휘두르는 흉내를 낸다.',
+    line: (s) => `${kidCall(s)}! 우리도 가르쳐 주면 안 돼요? 돈은 없지만…`,
+    dir: '담장에 매달려',
+    shoo: '아이들이 우르르 흩어졌다. 다음 날에도 담장 위에 머리가 올라왔다.',
+  },
+  {
+    id: 'gate',
+    title: '대문 앞에 쪼그려 앉은 아이들',
+    narration: '아침마다 대문 앞에 동네 아이들이 쪼그려 앉아 연무장 안을 들여다본다.',
+    open: () => '아침마다 대문 앞에 동네 아이들이 쪼그려 앉아 연무장 안을 들여다본다. 기합 소리가 날 때마다 같이 「얍!」 하고 소리친다.',
+    line: (s) => `${kidCall(s)}! 저희도 「얍!」 할 줄 알아요! 들어가서 해 보면 안 돼요?`,
+    dir: '대문 틈으로 고개를 들이밀며',
+    shoo: '대문을 닫자 아이들이 흩어졌다. 담 너머에서 「얍!」 소리가 한참 더 들렸다.',
+  },
+  {
+    id: 'sticks',
+    title: '막대기 칼싸움 대장',
+    narration: '장터 공터에서 아이들이 막대기를 들고 칼싸움을 한다.',
+    open: (s) => `장터 공터에서 아이들이 막대기를 들고 칼싸움을 한다. 대장 노릇 하는 아이가 「내가 ${s.sectName} 사범이다!」 하고 외친다.`,
+    line: () => '어, 진짜다! 진짜 사범님이다! 저희 칼싸움 좀 봐 주세요!',
+    dir: '막대기를 치켜들며',
+    shoo: '「막대기 들고 놀다 눈 다친다」 한마디에 아이들이 막대기를 내던지고 흩어졌다. 이튿날 공터에서는 또 칼싸움이 벌어졌다.',
+  },
+  {
+    id: 'tree',
+    title: '감나무 위의 구경꾼들',
+    narration: '담 옆 감나무 가지마다 아이들이 매달려 연무장을 내려다본다.',
+    open: (s) => `담 옆 감나무 가지마다 아이들이 매달려 연무장을 내려다본다. 가지가 휘청일 때마다 ${alive(s).length ? '제자들이 수련을 멈추고 올려다본다' : '수련하던 손이 저절로 멈춘다'}.`,
+    line: () => '떨어져도 안 울게요! 그러니까 조금만 더 보면 안 돼요?',
+    dir: '가지에 매달린 채',
+    shoo: '「떨어지면 다친다!」 호통에 아이들이 미끄러지듯 내려와 달아났다. 감 몇 개가 함께 떨어졌다.',
+  },
+];
 const kids: JourneyEventDef = {
   key: 'home_kids',
   kind: 'HOME',
+  weightBy: (s) => (s.age >= 62 ? 0.5 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 4,
-  build: () => ({
-    title: '담 너머의 눈동자들',
-    category: 'FAMILY',
-    sceneActor: 'DISCIPLE',
-    narration: '수련 시간마다 담장 위로 동네 아이들 머리가 줄줄이 올라온다.',
-    script: [N('수련 시간마다 담장 위로 동네 아이들 머리가 쏙쏙 올라온다. 목검 휘두르는 흉내를 낸다.'), P('동네 꼬마', '아저씨! 우리도 가르쳐 주면 안 돼요? 돈은 없지만…', '담장에 매달려')],
-    options: [
-      { id: 'teach', label: '보름날마다 마당을 열어 공짜로 가르친다', hint: '인덕·명성 · 재능 있는 아이가 있을지도' },
-      { id: 'shoo', label: '「위험하다」며 쫓아 보낸다' },
-    ],
-  }),
-  resolve: (s, opt) => {
-    if (opt === 'shoo') return say(s, [['나레이션', '아이들이 우르르 흩어졌다. 다음 날에도 담장 위에 머리가 올라왔다.']]);
+  build: (s) => {
+    const sc = pickFresh(s, 'home_kids', KID_SCENES);
+    return {
+      title: sc.title,
+      category: 'FAMILY',
+      sceneActor: 'DISCIPLE',
+      speaker: '동네 꼬마',
+      narration: sc.narration,
+      script: [N(sc.open(s)), P('동네 꼬마', sc.line(s), sc.dir)],
+      options: [
+        { id: 'teach', label: '보름날마다 마당을 열어 공짜로 가르친다', hint: '인덕·명성 · 재능 있는 아이가 있을지도' },
+        { id: 'shoo', label: '「위험하다」며 쫓아 보낸다' },
+      ],
+      meta: { vkey: sc.id },
+    };
+  },
+  resolve: (s, opt, c) => {
+    if (opt === 'shoo') return say(s, [['나레이션', (KID_SCENES.find((x) => x.id === c.data?.vkey) || KID_SCENES[0]).shoo]]);
     let n = addFame(addRep(s, { virtue: 8 }), 8);
+    // 수십 년 뒤, 그 아이들 가운데 하나가 어른이 되어 찾아온다 (노년 사건)
+    if (!s.flags.storyMemory?.taught_kids) n = remember(n, 'taught_kids', String(s.year));
     let extra = '';
     if (hasRoom(n) && chance(0.3)) {
-      const d = { ...createDiscipleEntity(n, { isChild: true, isGenius: chance(0.4), childTalent: 'DILIGENT', archetype: '담장을 넘던 동네 아이' }), joinedYear: n.year, temperamentKnown: true };
+      const d = { ...createDiscipleEntity(n, { isChild: true, adopted: true, isGenius: chance(0.4), childTalent: 'DILIGENT', archetype: '담장을 넘던 동네 아이' }), joinedYear: n.year, temperamentKnown: true };
       n = { ...n, disciples: [...n.disciples, d] };
       extra = ` 그중 ${josa(d.name, '이가')} 유난히 눈에 띄어 정식 제자로 받았다.`;
     }
@@ -690,17 +1091,63 @@ const kids: JourneyEventDef = {
 };
 
 // ───────── 12. 시절의 물결 — 그 해의 풍문이 도장 앞까지 온다 ─────────
+const freshRumors = (s: GameState) => rumorsFor(s.country, s.year).filter((r) => !(s.flags.storyMemory?.heard_rumors || '').includes(r.slice(0, 24)));
+const ERA_SCENES: Array<{ id: string; when?: (s: GameState) => boolean; title: string; speaker: string; lines: (s: GameState, rumor: string) => ReturnType<typeof N>[] }> = [
+  {
+    id: 'disciple',
+    when: (s) => alive(s).length > 0,
+    title: '저잣거리의 풍문',
+    speaker: '문하생',
+    lines: (_s, rumor) => [N('장에 다녀온 제자가 숨을 몰아쉬며 들어온다.'), P('문하생', rumor, '눈이 휘둥그레져'), P('문하생', '스승님, 우리도 뭔가 해야 하는 것 아닙니까?')],
+  },
+  {
+    id: 'traveler',
+    title: '나그네가 전한 소식',
+    speaker: '지나가던 나그네',
+    lines: (_s, rumor) => [
+      N('물 한 바가지를 얻어 마신 나그네가 대문 턱에 걸터앉아 먼 데 소식을 풀어놓는다.'),
+      P('지나가던 나그네', rumor, '봇짐을 고쳐 메며'),
+      P('지나가던 나그네', '이 고을도 머잖아 그 바람을 맞을 거요.'),
+    ],
+  },
+  {
+    id: 'peddler',
+    title: '등짐장수의 장 소식',
+    speaker: '등짐 진 상인',
+    lines: (_s, rumor) => [
+      N('등짐을 내려놓고 땀을 훔치던 상인이, 물 한 사발 값으로 여러 고을 소식을 풀어놓는다.'),
+      P('등짐 진 상인', rumor, '부채질을 하며'),
+      P('등짐 진 상인', '이럴 때일수록 곳간 단속을 잘하셔야 하오.'),
+    ],
+  },
+  {
+    id: 'well',
+    title: '우물가의 수군거림',
+    speaker: '우물가 아낙',
+    lines: (_s, rumor) => [
+      N('우물가에 모인 아낙들이 물동이를 내려놓고 수군거린다.'),
+      P('우물가 아낙', rumor, '목소리를 낮추며'),
+      P('우물가 아낙', '사범님 댁도 단단히 채비하셔요.'),
+    ],
+  },
+];
 const eraWave: JourneyEventDef = {
   key: 'home_era',
   kind: 'HOME',
-  cond: (s) => rumorsFor(s.country, s.year).length > 0,
+  // 이미 들은 풍문은 다시 돌지 않는다
+  cond: (s) => freshRumors(s).length > 0,
   build: (s) => {
-    const rumor = rand(rumorsFor(s.country, s.year));
+    const rumor = rand(freshRumors(s));
+    // 풍문이 도장에 닿는 길도 여러 가지다 — 장에 다녀온 제자, 지나가던 나그네, 등짐장수, 우물가의 아낙들
+    const sc = pickFresh(s, 'home_era', ERA_SCENES);
+    const lines = sc.lines(s, rumor);
     return {
-      title: '저잣거리의 풍문',
+      title: sc.title,
+      meta: { rumorIdx: rumorsFor(s.country, s.year).indexOf(rumor), rumor: rumor.slice(0, 24), vkey: sc.id },
       category: 'HISTORICAL',
+      speaker: sc.speaker,
       narration: rumor,
-      script: [N('장에 다녀온 제자가 숨을 몰아쉬며 들어온다.'), P('문하생', rumor, '눈이 휘둥그레져'), P('문하생', '스승님, 우리도 뭔가 해야 하는 것 아닙니까?')],
+      script: lines,
       options: [
         { id: 'prepare', label: '곳간을 단속하고 제자들을 단속한다', hint: '살림 대비 · 기강' },
         { id: 'help', label: `고을 사람들을 돕는다 (30${cur(s)})`, disabled: s.money < 30, disabledReason: '돈이 부족하다', hint: '인덕·명성' },
@@ -708,7 +1155,9 @@ const eraWave: JourneyEventDef = {
       ],
     };
   },
-  resolve: (s, opt) => {
+  resolve: (s0, opt, c) => {
+    const heard = s0.flags.storyMemory?.heard_rumors || '';
+    const s = remember(s0, 'heard_rumors', `${heard}|${String(c.data?.rumor || '')}`.slice(-1500));
     if (opt === 'prepare') return say(addMoney(addRep(s, { commerce: 3 }), 25), [['나레이션', '곳간을 정리하고 묵은 곡식을 팔았다. 난리가 와도 한 철은 버틸 것이다. (+25)']]);
     if (opt === 'help') return say(addFame(addRep(addMoney(s, -30), { virtue: 8 }), 10), [['나레이션', '제자들과 함께 쌀을 나르고 무너진 담을 고쳤다. 고을 사람들이 「그 도장 사람들」 이야기를 했다.']]);
     return say(trainEquipped(addRep(s, { ascetic: 5 }), 30), [['나레이션', '세상이 시끄러울수록 마당의 목검 소리는 더 또렷했다.']]);
@@ -719,8 +1168,8 @@ const eraWave: JourneyEventDef = {
 const echoMagistrateSon: JourneyEventDef = {
   key: 'echo_magistrate_son',
   kind: 'ECHO_HOME',
-  build: () => ({
-    title: '사또 도령, 무관이 되다',
+  build: (s) => ({
+    title: byCountry(s, '사또 도령, 무관이 되다', '지현의 도련님, 무관이 되다', '다이칸의 도련님, 무사가 되다'),
     category: 'LIFE',
     narration: '말을 탄 젊은 무관이 도장 앞에 내렸다. 울며 뛰쳐나가던 그 도령이다.',
     script: [N('말을 탄 젊은 무관이 도장 앞에 내렸다. 몇 해 전 울며 뛰쳐나가던 그 도령이다.'), P('젊은 무관', '스승님! 그때는 철이 없었습니다. 무과에 급제했습니다. 스승님 덕입니다.', '넙죽 절하며')],

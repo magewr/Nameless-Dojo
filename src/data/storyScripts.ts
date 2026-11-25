@@ -10,6 +10,17 @@ import { josa } from '../utils/korean';
 // 3. 사소한 NPC와의 과거 인연이 10~25년 뒤 큰 은혜나 원한으로 반드시 되돌아온다.
 // =========================================================================
 
+/**
+ * 말 상대 없이 홀로 겪는 사건인가? (빗소리 속 깨달음, 병, 회상 등)
+ * — 이런 사건에 '방문자'가 대문으로 걸어 들어오거나 "상대를 바라본다"는 지문이 붙으면 어색하다.
+ */
+export function isSoloEvent(ev: ActiveEvent): boolean {
+  if (ev.sceneActor || ev.speaker || ev.dialogue) return false;
+  if (ev.category === 'RIVAL' || ev.category === 'DUEL' || ev.category === 'DEBT' || ev.category === 'FAMILY') return false;
+  if (ev.script && ev.script.some((l) => l.role === 'NPC')) return false;
+  return true;
+}
+
 export function buildShortLinesFromLegacy(
   ev: ActiveEvent,
   heroName: string
@@ -41,7 +52,7 @@ export function buildShortLinesFromLegacy(
   lines.push({
     speaker: heroName,
     role: 'HERO',
-    stageDirection: '잠시 숨을 고르며 상대를 바라본다',
+    stageDirection: ev.dialogue ? '잠시 숨을 고르며 상대를 바라본다' : '홀로 잠시 생각에 잠긴다',
     text: '……어떻게 해야 할까.',
   });
   return lines;

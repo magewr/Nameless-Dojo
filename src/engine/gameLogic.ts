@@ -70,7 +70,7 @@ import { buildDetailedVictoryConclusion, buildRealDuelAftermathEvent, pickAvenge
 import { josa } from '../utils/korean';
 
 import { addLog } from './log';
-import { applyJourneyBattle, applyJourneyDefeat, isJourneyEvent, pickDueHomeEcho, pickHomeEvent, resolveJourneyEvent } from './journey';
+import { applyJourneyBattle, applyJourneyDefeat, isJourneyEvent, pickDueHomeEcho, pickElderEvent, pickHomeEvent, resolveJourneyEvent } from './journey';
 import { applyTourneyBattle, startTourney } from './tourney';
 export { addLog };
 
@@ -716,8 +716,8 @@ export function generateMerchantOffer(state: GameState): MerchantOffer {
   const b3 = Math.random() < westProb ? pick(westerns) : pick(legends);
   if (b3 && !chosenBooks.some((c) => c.id === b3.id)) chosenBooks.push(toBook(b3));
 
-  // 극악 히든 이계 금서 (2% ~ 최대 5.5% 수준 유지)
-  const grimoireChance = state.turn < 8 ? 0.015 : Math.min(0.055, 0.02 + state.fame * 0.00012 + (state.country === 'JAPAN' ? 0.008 : 0));
+  // 이계 금서 (처음 7% → 명성이 오를수록 최대 16%). 예전 2~5.5%로는 일생에 두어 번 스쳐 갈 뿐이라 이계의 길이 사실상 닫혀 있었다.
+  const grimoireChance = state.turn < 8 ? 0.04 : Math.min(0.16, 0.07 + state.fame * 0.00004 + (state.country === 'JAPAN' ? 0.02 : 0));
   let hasGrimoire = false;
   if (grimoires.length > 0 && Math.random() < grimoireChance) {
     const grim = pick(grimoires)!;
@@ -1137,8 +1137,42 @@ export function rollMidSeasonEvent(state: GameState): ActiveEvent | null {
 // 정해진 이야기(라이벌·가족·역사·대회 등)는 그대로 두고, 우연에 맡기던 자리에는 생성형 사건을 섞는다.
 // 고정된 일회성 사건이 바닥나도 계절마다 다른 사람·다른 사연이 찾아온다.
 const RANDOM_POOL_PREFIX = ['random_', 'life_', 'duel_british', 'duel_mongol', 'duel_henri'];
+// 노년에는 늘 되풀이되던 도장의 일상(하산·재방문·말썽·교류·도장깨기)을 밀어내고 노년의 사건이 자리를 차지할 수 있다.
+// 생애 변곡점·숙적·대회·후계·시대 사건·재난·반란처럼 정해진 큰 사건은 건드리지 않는다.
+const ELDER_REPLACEABLE = [
+  ...RANDOM_POOL_PREFIX,
+  'disciple_graduate',
+  'grad_revisit_ordinary',
+  'grad_revisit_success',
+  'grad_revisit_master',
+  'disciple_illness',
+  'sect_exchange',
+  'sect_envoy',
+  'sect_alliance',
+  'sect_aid',
+  'trouble_brawl',
+  'trouble_bully',
+  'trouble_gamble',
+  'trouble_theft',
+  'gift_disciple',
+  'hero_fever',
+];
+function elderShare(age: number): number {
+  return age >= 75 ? 0.66 : age >= 68 ? 0.6 : age >= 60 ? 0.55 : 0.45;
+}
 function pickSeasonEventMixed(state: GameState): ActiveEvent | null {
   const fixed = pickSeasonalEvent(state);
+  if (state.age >= 55) {
+    // 조용한 계절은 예전처럼 절반쯤은 조용히 지나간다 (사건이 더 잦아지지는 않는다). 일어난다면 노년의 사건을 먼저.
+    if (!fixed) {
+      if (Math.random() >= 0.47) return null;
+      return pickElderEvent(state) || pickHomeEvent(state);
+    }
+    if (ELDER_REPLACEABLE.some((p) => fixed.id.startsWith(p)) && Math.random() < elderShare(state.age)) {
+      const elder = pickElderEvent(state);
+      if (elder) return elder;
+    }
+  }
   const replaceable = !fixed || RANDOM_POOL_PREFIX.some((p) => fixed.id.startsWith(p));
   if (!replaceable) return fixed;
   const gen = pickHomeEvent(state);
@@ -1166,10 +1200,19 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
   const coolLimit = getDifficultyId(state) === 'HELL' ? 2 : getDifficultyId(state) === 'HARD' ? 3 : 6;
   const nextRecent = isAftermath ? prevRecent : [baseKey, ...prevRecent.filter((k) => k !== baseKey)].slice(0, coolLimit);
 
+  // 계열마다 마지막으로 일어난 턴도 남긴다 — 같은 계열이 너무 촘촘히 되풀이되지 않게 (events.ts · sectEvents.ts의 간격 표)
+  const fixedLast = isJourneyEvent(event) ? state.flags.homeEventLast : { ...(state.flags.homeEventLast || {}), [`@${baseKey}`]: state.turn };
+  // 고정 사건의 변주(meta.vkey)도 언제 봤는지 적는다 — 같은 장면이 연달아 나오지 않게 (journeyCore.pickFresh)
+  const vkeys = isJourneyEvent(event)
+    ? []
+    : [...(event.meta?.vkey !== undefined ? [String(event.meta.vkey)] : []), ...(Array.isArray(event.meta?.vkeys) ? (event.meta.vkeys as unknown[]).map(String) : [])];
+  const eventSeen = vkeys.length
+    ? { ...(state.flags.eventSeen || {}), ...Object.fromEntries(vkeys.map((k) => [`${baseKey}:${k}`, state.turn])) }
+    : state.flags.eventSeen;
   let next: GameState = {
     ...state,
     activeEvent: null,
-    flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent },
+    flags: { ...state.flags, triggeredEvents: triggered, recentEventBases: nextRecent, homeEventLast: fixedLast, eventSeen },
   };
   const cMeta = COUNTRIES[state.country];
   const diffCfg = getDifficultyConfig(state);
@@ -1397,15 +1440,16 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
 
     case 'fever_medicine': {
       const { cost, cureChance } = getFeverMedicineMeta(next);
+      const ailment = String(event.meta?.ailment || '겨울 열병');
       next.money = Math.max(0, next.money - cost);
       if (Math.random() < cureChance) {
         next.health = Math.min(100, next.health + 10);
-        return addLog(next, `귀한 탕약(-${cost}${cMeta.currency})이 잘 들어 겨울 열병을 털어 냈다! (건강 +10)`, 'GOOD');
+        return addLog(next, `귀한 탕약(-${cost}${cMeta.currency})이 잘 들어 ${josa(ailment, '을를')} 털어 냈다! (건강 +10)`, 'GOOD');
       }
       // 탕약 실패: 72% 차도 미미 / 28% 약성 충돌·고열 악화!
       if (Math.random() < 0.72) {
         next.health = Math.max(4, next.health - 10);
-        next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '겨울 열병 후유증', turnsRemaining: 2 }];
+        next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: `${ailment} 후유증`, turnsRemaining: 2 }];
         return addLog(next, `비싼 탕약(-${cost}${cMeta.currency})을 달여 마셨으나 열기가 쉽게 꺾이지 않았다… (건강 -10 · 후유증)`, 'WARN');
       }
       const severeLoss = diffId === 'HELL' ? 30 : diffId === 'HARD' ? 22 : 18;
@@ -1420,15 +1464,16 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
     }
     case 'fever_endure': {
       const loss = next.age >= 55 ? 20 : 15;
+      const ailment = String(event.meta?.ailment || '겨울 열병');
       next.health = Math.max(0, next.health - loss);
       next.stats = { ...next.stats, qi: next.stats.qi + 3, wil: next.stats.wil + 2 };
-      next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: '겨울 열병 후유증', turnsRemaining: 2 }];
+      next.statuses = [...next.statuses, { id: 'LIGHT_INJURY', label: `${ailment} 후유증`, turnsRemaining: 2 }];
       if (next.health <= 0) {
         next.deathCause = '열병(치료 포기)';
         next.phase = 'ENDING';
-        return addLog(next, '열병을 내공으로 버텨 내려다 끝내 기력이 다해 쓰러졌다…', 'DANGER');
+        return addLog(next, `${josa(ailment, '을를')} 내공으로 버텨 내려다 끝내 기력이 다해 쓰러졌다…`, 'DANGER');
       }
-      return addLog(next, `열병을 내공으로 억눌렀으나 몸이 크게 축났다. (건강 -${loss}, 영력 +3)`, 'WARN');
+      return addLog(next, `${josa(ailment, '을를')} 내공으로 억눌렀으나 몸이 크게 축났다. (건강 -${loss}, 영력 +3)`, 'WARN');
     }
 
     case 'disc_ill_pay':
@@ -1472,7 +1517,7 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
         next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 8 };
         return addLog(next, `${dName}이(가) 끝내 병사했다… 남은 문하생들이 스승을 원망스러운 눈으로 바라본다.`, 'DANGER');
       }
-      return addLog(next, `${dName}이(가) 천운으로 스스로 열병을 이겨 냈으나 마음의 앙금이 남았다.`, 'WARN');
+      return addLog(next, `${dName}이(가) 천운으로 스스로 ${josa(String(event.meta?.illness || '열병'), '을를')} 이겨 냈으나 마음의 앙금이 남았다.`, 'WARN');
     }
 
     case 'disc_pass_honor': {
@@ -1542,8 +1587,10 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       return addLog(next, '문하생들의 갈등을 지혜롭게 중재해 도장이 한층 화목해졌다. (전원 충성도 +10)', 'GOOD');
     case 'quarrel_spar': {
       next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 6 };
+      // 다툰 두 사람이 자란다 (예전 세이브의 사건에는 두 사람 기록이 없다 — 그때는 맨 앞의 둘)
+      const pair = [event.meta?.aId, event.meta?.bId].filter(Boolean);
       next.disciples = next.disciples.map((d, idx) =>
-        !d.dead && idx < 2 ? { ...d, stats: { ...d.stats, str: d.stats.str + 3, agi: d.stats.agi + 3 } } : d
+        !d.dead && (pair.length ? pair.includes(d.id) : idx < 2) ? { ...d, stats: { ...d.stats, str: d.stats.str + 3, agi: d.stats.agi + 3 } } : d
       );
       return addLog(next, '공개 대련 끝에 두 문하생이 서로의 실력을 인정하며 크게 성장했다!', 'GOOD');
     }
@@ -1790,7 +1837,26 @@ export function resolveEventOption(state: GameState, event: ActiveEvent, optionI
       next.debtTurns = 0;
       next.fame = Math.max(0, next.fame - 15);
       next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 20 };
-      return addLog(next, '전당포 해결사 노릇으로 빚을 탕감했다. 저잣거리의 시선이 싸늘하다.', 'WARN');
+      if (state.age >= 62) next.health = Math.max(1, next.health - 8);
+      return addLog(next, state.age >= 62 ? '백발로 전당포의 해결사 노릇을 했다. 빚은 갚았지만, 제자들이 그 모습을 보고 고개를 돌렸다.' : '전당포 해결사 노릇으로 빚을 탕감했다. 저잣거리의 시선이 싸늘하다.', 'WARN');
+    case 'debt_disciples':
+      next.debt = 0;
+      next.debtTurns = 0;
+      next.disciples = next.disciples.map((d) => (d.dead || d.isChild ? d : { ...d, loyalty: Math.min(100, d.loyalty + 6), stats: { ...d.stats, vit: d.stats.vit + 1 } }));
+      next.reputation = { ...next.reputation, virtue: next.reputation.virtue + 6 };
+      return addLog(next, '제자들이 한 해 동안 장터 짐꾼과 표국 호위로 품을 팔아 스승의 빚을 갚았다. 그해 마당은 저녁에만 붐볐다.', 'GOOD');
+    case 'debt_labor':
+      next.debt = 0;
+      next.debtTurns = 0;
+      next.health = Math.max(1, next.health - 10);
+      next.fame = Math.max(0, next.fame - 8);
+      next.reputation = { ...next.reputation, commerce: next.reputation.commerce + 10 };
+      return addLog(next, '한 해 동안 새벽엔 장터 짐을 지고 밤엔 표국 수레를 지켰다. 빚은 다 갚았지만, 「도장주가 짐꾼 노릇을 한다」는 말이 돌았다. (건강 -10, 명성 -8, 상무 +10)', 'WARN');
+    case 'debt_sell_land':
+      next.debt = 0;
+      next.debtTurns = 0;
+      next.facilities = { ...next.facilities, yard: Math.max(1, next.facilities.yard - 1) };
+      return addLog(next, '연무장 땅 절반을 팔아 빚을 갚았다. 담장이 안쪽으로 옮겨졌다. 마당이 좁아진 만큼 목검 소리가 가까워졌다.', 'WARN');
     case 'debt_duel':
       next.pendingBattle = createBattleConfig(
         'b_debt_duel', '빚 청산 진검결투', '패배 시 사망 위험', true,
@@ -2976,7 +3042,9 @@ export function executeScheduleActivity(
         });
         discipleBadgeText = `문하생 ${aliveCount}명 합동 연마`;
       }
-      next.reputation.ascetic += Math.max(1, Math.round(2 * eff));
+      // 술법(이계 초식)을 닦는 계절은 구도가 아니라 이단의 세평으로 쌓인다 — 마당에서 불꽃이 이는 걸 다들 본다.
+      if (sk.origin.includes('FANTASY')) next.reputation.arcane += Math.max(1, Math.round(3 * eff));
+      else next.reputation.ascetic += Math.max(1, Math.round(2 * eff));
       floatingText = `${updated.customName || updated.name} +${expGain}`;
       floatingColor = leveledUp ? '#fde047' : '#fbbf24';
       feedLines.push({
@@ -3367,7 +3435,8 @@ export function executeScheduleActivity(
         if (Math.random() < 0.75) next.stats.wil += 1;
         if (Math.random() < 0.7) next.stats.qi += 1;
         if (Math.random() < 0.5) next.stats.ins += 1;
-        next.reputation.ascetic += Math.max(1, Math.round(3 * eff));
+        if (sk.origin.includes('FANTASY')) next.reputation.arcane += Math.max(1, Math.round(3 * eff));
+        else next.reputation.ascetic += Math.max(1, Math.round(3 * eff));
 
         floatingText = `깨달음 ${insight}%`;
         floatingColor = '#c084fc';
@@ -3604,6 +3673,9 @@ export interface BattleOutcomePayload {
   fatalWoundsDealt?: number;
 }
 
+// 진검 승리 한 번이 남기는 살기. 무사수행 정산(applyJourneyBattle)이 이 값을 기준으로 덜어 내므로 함께 움직인다.
+export const REAL_DUEL_RUTHLESS = 4;
+
 // 실시간 전투 종료 후 상태 정산
 const PHANTOM_MAGIC_EVENTS = ['fan_first_shock', 'fan_inquisition', 'fan_missionary', 'fan_royal_summon'];
 
@@ -3625,7 +3697,7 @@ export function repairPhantomMagicRecord(state: GameState): GameState {
       // 잘못 열린 충격 이벤트는 나중에 진짜로 술법을 드러냈을 때 다시 일어날 수 있게 되돌린다.
       triggeredEvents: f.triggeredEvents.filter((id) => !PHANTOM_MAGIC_EVENTS.includes(id)),
     },
-    reputation: { ...state.reputation, arcane: Math.max(0, state.reputation.arcane - 12 * (f.magicCastCount || 0)) },
+    reputation: { ...state.reputation, arcane: Math.max(0, state.reputation.arcane - 6 * (f.magicCastCount || 0)) },
     milestones: (state.milestones || []).filter((m) => m.key !== 'MAGIC_PUBLIC'),
   };
 }
@@ -3705,7 +3777,8 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
       usedMagicPublicly: true,
       magicCastCount: next.flags.magicCastCount + 1,
     };
-    next.reputation = { ...next.reputation, arcane: next.reputation.arcane + 12 };
+    // 술법을 쓴 싸움 한 번에 +6. 예전 +12는 일생 수십 번의 싸움만으로 수백이 쌓여, 한 번 배운 사람은 누구나 이계로 기억됐다.
+    next.reputation = { ...next.reputation, arcane: next.reputation.arcane + 6 };
   }
   if (outcome.usedForbidden) {
     next.flags = { ...next.flags, forbiddenCastCount: next.flags.forbiddenCastCount + 1 };
@@ -3932,7 +4005,9 @@ function applyBattleOutcomeCore(state: GameState, outcome: BattleOutcomePayload)
 
     if (battle.isRealDuel) {
       next.flags = { ...next.flags, realDuelWins: next.flags.realDuelWins + 1 };
-      next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + 12 };
+      // 진검 승리 자체는 살기를 조금만 남긴다. 살기의 큰 몫은 쓰러진 상대를 베느냐 살리느냐(처분 선택)에서 온다 —
+      // 예전 +12는 산적을 자주 만난 사람일수록 저절로 「피의 도장」이 되게 만들었다.
+      next.reputation = { ...next.reputation, ruthless: next.reputation.ruthless + REAL_DUEL_RUTHLESS };
     } else {
       next.flags = { ...next.flags, sparringWins: next.flags.sparringWins + 1 };
       next.reputation = { ...next.reputation, virtue: next.reputation.virtue + 2 };

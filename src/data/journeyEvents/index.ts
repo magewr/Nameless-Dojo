@@ -6,8 +6,14 @@ import { PEOPLE_EVENTS } from './people';
 import { HOME_EVENTS } from './home';
 import { SEASONAL_EVENTS } from './seasonal';
 import { CONDITIONAL_EVENTS } from './conditional';
+import { ELDER_LIFE_EVENTS } from './elder';
+import { ELDER_ROLE_EVENTS } from './elderRole';
+import { ELDER_MORE_EVENTS } from './elderMore';
+import { ARCANE_EVENTS } from './arcane';
+import { ROAD_MORE_EVENTS } from './roadMore';
+import { MIDLIFE_EVENTS } from './midlife';
 
-export const ALL_JOURNEY_EVENTS: JourneyEventDef[] = [...COMMON_EVENTS, ...MASTER_EVENTS, ...PEOPLE_EVENTS, ...HISTORY_EVENTS, ...HISTORY_ECHOES, ...HOME_EVENTS, ...SEASONAL_EVENTS, ...CONDITIONAL_EVENTS];
+export const ALL_JOURNEY_EVENTS: JourneyEventDef[] = [...COMMON_EVENTS, ...MASTER_EVENTS, ...PEOPLE_EVENTS, ...HISTORY_EVENTS, ...HISTORY_ECHOES, ...HOME_EVENTS, ...SEASONAL_EVENTS, ...CONDITIONAL_EVENTS, ...ELDER_LIFE_EVENTS, ...ELDER_ROLE_EVENTS, ...ELDER_MORE_EVENTS, ...ARCANE_EVENTS, ...ROAD_MORE_EVENTS, ...MIDLIFE_EVENTS];
 
 const BY_KEY = new Map(ALL_JOURNEY_EVENTS.map((d) => [d.key, d]));
 

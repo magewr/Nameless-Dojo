@@ -9,9 +9,18 @@ export function hasBatchim(word: string): boolean {
   return false;
 }
 
-export function josa(word: string, pair: '이가' | '은는' | '을를' | '과와'): string {
+export function josa(word: string, pair: '이가' | '은는' | '을를' | '과와' | '으로로' | '아야'): string {
   const batchim = hasBatchim(word);
   switch (pair) {
+    case '으로로': {
+      // ㄹ 받침 뒤에는 「로」 (칼로, 길로)
+      const cleaned = word.replace(/\(.*?\)|\[.*?\]|【.*?】|「|」|『|』|\s+/g, '');
+      const code = cleaned.charCodeAt(cleaned.length - 1);
+      const rieul = code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 === 8;
+      return `${word}${batchim && !rieul ? '으로' : '로'}`;
+    }
+    case '아야':
+      return `${word}${batchim ? '아' : '야'}`;
     case '이가':
       return `${word}${batchim ? '이' : '가'}`;
     case '은는':

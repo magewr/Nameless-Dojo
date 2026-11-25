@@ -77,7 +77,8 @@ export function diffMilestones(prev: GameState, next: GameState): LifeMilestone[
 
   next.disciples.forEach((d) => {
     const before = prev.disciples.find((p) => p.id === d.id);
-    if (d.isChild && !before) add('CHILD_BORN', `자녀 ${josa(d.name, '이가')} 태어났다`);
+    if (d.isChild && !d.adopted && !before) add('CHILD_BORN', `자녀 ${josa(d.name, '이가')} 태어났다`);
+    if (d.isChild && d.adopted && !before) add('CHILD_ADOPTED', `어린 ${josa(d.name, '을를')} 거두어 문하에서 길렀다`);
     if (d.role === 'HEIR' && before?.role !== 'HEIR') add('HEIR_NAMED', `${josa(d.name, '을를')} 2대 종주로 세웠다`);
     if (d.dead && before && !before.dead) {
       if (before.role === 'HEIR') add('HEIR_LOST', `2대 종주로 세운 ${josa(d.name, '을를')} 먼저 떠나보냈다`);

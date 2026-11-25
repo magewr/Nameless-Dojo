@@ -78,17 +78,29 @@ export interface LineageFacts {
 
 // 세평 축마다 쌓을 기회가 크게 다르다. 인덕은 올려 주는 선택지가 57곳(합계 873)인데 살기는 11곳(합계 180)뿐이라,
 // 수치를 그대로 비교하면 거의 모든 일생이 인덕으로 끝난다. 그래서 "얻을 수 있는 양에 견주어 얼마나 쌓았는가"로 비교한다.
-// opportunity = 인덕을 1로 둔 그 축의 획득 기회. 이벤트 고정 보상 합계 비율(1 : 0.49 : 0.29 : 0.21 : 0.22)에
-// 수련·호위를 할 때마다 조금씩 쌓이는 몫(구도, 상무)을 더해 잡은 값이다. 이벤트 보상을 손보면 이 값도 함께 고쳐야 한다.
-// 무사수행·도장 생성형 사건이 들어오며 인덕·살기를 얻을 기회가 늘었다. 플레이테스트 봇 150인생의 사망 시 중앙값
-// (인덕 660→823, 구도 424→396, 상무 126→123, 살기 29→89)에 맞춰, 예전 축 사이의 비율이 유지되도록 다시 잡았다.
-// 같은 점수면 앞에 오는 축이 이긴다.
+// opportunity = 인덕을 1로 둔 그 축의 획득 기회. 같은 점수면 앞에 오는 축이 이긴다.
+//
+// 2026-11 재보정 (scripts/endingBench.ts — 플레이 성향 6가지 × 90인생):
+//   예전 값(구도 0.49 · 상무 0.27 · 살기 0.38 · 이단 0.16 + 술법 공개 시 이계 강제)으로는
+//   무작위로 고르는 플레이어의 68%가 「산문의 등불」이었고, 인덕을 노려도 절반은 구도, 살기를 노려도 12%만 살기로 끝났다.
+//   수련만 해도 구도가 저절로 쌓이는 데 비해 구도의 기회값이 너무 작았고(구도 과대평가),
+//   살기는 선택으로 쌓을 기회가 적어 기회값이 너무 컸다(살기 과소평가).
+//   함께 고친 것: 진검 승리의 자동 살기 +12→+4(무사수행은 0), 빚 독촉에 살기 없는 갚을 길, 술법 사용 이단 +12→+6.
+//   지금 값에서: 무작위 플레이어 인덕 28% · 구도 24% · 상무 14% · 살기 17% · 이계 17%,
+//   한 축을 노린 플레이어는 인덕 91% · 구도 86% · 상무 100% · 이계 86% · 살기 68%가 그 축의 엔딩을 받는다.
+//   이벤트 보상이나 수련·호위의 세평 몫을 손보면 `npm run test:ending`으로 다시 확인한다.
+//
+// 2026-11 사건 다양화 뒤 재보정: 길 위 사건 19종·중년기 도장 사건 17종이 들어오며 남을 돕는(인덕) 선택지가 크게 늘었다.
+//   그대로 두면 무작위 플레이어의 43%가 인덕으로 끝나서, 새 사건에 살기 20곳·이단 14곳의 선택지를 보태고 큰 인덕 보상을 줄인 뒤
+//   기회값을 구도 0.75→0.7 · 살기 0.17→0.15 · 이계 0.45→0.4로 낮췄다 (DUMP로 일생별 세평을 뽑아 격자 탐색).
+//   지금 값에서: 무작위 플레이어 인덕 22% · 구도 27% · 상무 14% · 살기 17% · 이계 20%,
+//   한 축을 노린 플레이어는 인덕 91% · 구도 93% · 상무 100% · 살기 92% · 이계 88%가 그 축의 엔딩을 받는다.
 const AXIS_ORDER: Array<{ axis: ChronicleAxis; key: keyof ReputationAxes; opportunity: number }> = [
   { axis: 'VIRTUE', key: 'virtue', opportunity: 1 },
-  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.49 },
-  { axis: 'COMMERCE', key: 'commerce', opportunity: 0.27 },
-  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.38 },
-  { axis: 'ARCANE', key: 'arcane', opportunity: 0.16 },
+  { axis: 'ASCETIC', key: 'ascetic', opportunity: 0.7 },
+  { axis: 'COMMERCE', key: 'commerce', opportunity: 0.6 },
+  { axis: 'RUTHLESS', key: 'ruthless', opportunity: 0.15 },
+  { axis: 'ARCANE', key: 'arcane', opportunity: 0.4 },
 ];
 // 보조 축으로 인정하는 최소 원점수. 한두 번의 선택으로 "겸비"가 붙지 않게 한다.
 const SECOND_AXIS_MIN_RAW = 30;
@@ -155,9 +167,9 @@ export function extractLineageFacts(state: GameState): LineageFacts {
   const ranked = AXIS_ORDER.filter((a) => a.axis !== 'ARCANE' || magic !== 'NONE')
     .map((a, i) => ({ axis: a.axis, raw: rep[a.key], val: rep[a.key] / a.opportunity, i }))
     .sort((a, b) => b.val - a.val || a.i - b.i);
-  let axis = ranked[0].axis;
-  // 이적을 공개하고 마도 세평이 뚜렷하면, 다른 축이 조금 더 높아도 세상은 그 유파를 마도로 기억한다.
-  if (magic === 'PUBLIC' && rep.arcane >= 50) axis = 'ARCANE';
+  // 예전에는 술법을 한 번 드러내고 이단 50만 넘으면 무조건 이계로 기억했다. 술법을 배울 길이 넓어진 지금은
+  // 그 규칙이 다른 모든 길을 삼킨다 — 이계도 다른 축과 같은 잣대로 겨룬다.
+  const axis = ranked[0].axis;
   const runnerUp = ranked.find((r) => r.axis !== axis);
   const topVal = ranked.find((r) => r.axis === axis)?.val || 0;
   const secondAxis = runnerUp && runnerUp.raw >= SECOND_AXIS_MIN_RAW && runnerUp.val >= topVal * 0.6 ? runnerUp.axis : null;
@@ -214,7 +226,7 @@ export function extractLineageFacts(state: GameState): LineageFacts {
     succession,
     isOneTrick,
 
-    heir: heirD ? { name: heirD.name, isChild: !!heirD.isChild } : null,
+    heir: heirD ? { name: heirD.name, isChild: !!heirD.isChild && !heirD.adopted } : null,
     aliveDiscipleCount: alive.length,
     firstDiscipleName: firstDisciple?.name || null,
 

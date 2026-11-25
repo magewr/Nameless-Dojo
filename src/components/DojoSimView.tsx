@@ -17,7 +17,8 @@ import {
   preloadAllGameArt,
   ProcessedSprite,
 } from '../pixel/spriteLoader';
-import { PixelPortrait } from './PixelPortrait';
+import { detectNpcGender, PixelPortrait } from './PixelPortrait';
+import { isSoloEvent } from '../data/storyScripts';
 import { AchievementsPanel } from './AchievementsModal';
 import { getSectTitleTooltip, HANJA_GLOSSARY, InGameSelect, InGameTooltip } from './InGameUI';
 import { getMasteryPct, isAtMasteryWall, MASTERY_NAMES } from '../data/booksAndSkills';
@@ -170,6 +171,40 @@ interface DiscipleAgent {
   nextThink: number;
 }
 
+// 사건 방문자의 보행 스프라이트: 화자의 성별·나이·신분에 맞춰 고른다.
+// (예전엔 의원·할머니·손주까지 모두 붉은 옷의 검객 그림으로 대문을 걸어 들어왔다.)
+type VisitorWalk = { src: string; isSheet: boolean; rows: 1 | 2; rowIndex: 0 | 1; inside?: boolean; discId?: string };
+function resolveVisitorWalk(ev: NonNullable<GameState['activeEvent']>, state: GameState, isSpouse: boolean): VisitorWalk {
+  const sheet = (info: { src: string; rows: 1 | 2; rowIndex: 0 | 1 }): VisitorWalk => ({ ...info, isSheet: true });
+  const c = state.country;
+  if (ev.sceneActor === 'MERCHANT') return { src: '/assets/sp_merchant_top.jpg', isSheet: false, rows: 1, rowIndex: 0 };
+  if (isSpouse) {
+    const g = state.spouse?.gender || (state.gender === 'FEMALE' ? 'MALE' : 'FEMALE');
+    return { ...sheet(getHeroWalkSpriteInfo(c, g, state.spouse?.age ?? state.age)), inside: true };
+  }
+  const hint = (ev.speaker || '').trim();
+  const disc = hint ? state.disciples.find((d) => hint.includes(d.name)) : undefined;
+  if (ev.sceneActor === 'DISCIPLE' || disc || /제자|문하생|사범/.test(hint)) {
+    // 함께 사는 사람은 대문이 아니라 안채 쪽에서 걸어 나온다 (하산했다 돌아온 제자는 대문으로).
+    // 도장에 사는 제자라면 마당에서 수련하던 바로 그 제자가 걸어 나온다 (discId — 같은 사람이 둘로 보이지 않게)
+    return { src: '/assets/sheet_walk_disciple.jpg', isSheet: true, rows: 1, rowIndex: 0, inside: !!disc && !disc.dead, discId: disc && !disc.dead ? disc.id : undefined };
+  }
+  // 싸우러 온 사람(도전자·숙적·왈패)은 기존 검객 그림을 그대로 쓴다.
+  const hostile = ev.category === 'DUEL' || ev.category === 'DEBT' || ev.category === 'RIVAL' || ev.sceneActor === 'ENEMY' || ev.sceneActor === 'RIVAL';
+  if (!hint || hostile) return { src: '/assets/sp_enemy_top.jpg', isSheet: false, rows: 1, rowIndex: 0 };
+  const old = /(노파|할머니|할아버지|영감|노인|어르신|노고수|은둔|노승|스님|대사|촌장|노사|원로|노장|노부인|모친|어미|늙은|백발|노병|노선비)/.test(hint);
+  // 여성(딸·손녀·소녀 포함)은 여성 그림으로 — 어린 남자 문하생 그림으로 나오지 않게 성별을 먼저 본다.
+  if (detectNpcGender(hint) === 'FEMALE' || /(딸|손녀|소녀)/.test(hint)) return sheet(getHeroWalkSpriteInfo(c, 'FEMALE', old ? 60 : 26));
+  if (/(아이|소년|꼬마|손주|손자|동자|아기|아들)/.test(hint)) {
+    return { src: '/assets/sheet_walk_disciple.jpg', isSheet: true, rows: 1, rowIndex: 0 };
+  }
+  if (old) return sheet(getHeroWalkSpriteInfo(c, 'MALE', 60));
+  if (/(의원|농부|상인|거상|선비|서생|문인|집주인|이장|관리|사또|지현|다이칸|아전|하인|머슴|짐꾼|나그네|통역|사신|역관|화공|주인|어부|목수|대장장이|술사|방사|음양사|도사|연금술사|양인)/.test(hint)) {
+    return sheet(getHeroWalkSpriteInfo(c, 'MALE', 40));
+  }
+  return { src: '/assets/sp_enemy_top.jpg', isSheet: false, rows: 1, rowIndex: 0 };
+}
+
 export const DojoSimView: React.FC<Props> = ({
   state,
   isRunningSeason,
@@ -265,12 +300,15 @@ export const DojoSimView: React.FC<Props> = ({
     eventId: string | null;
     spriteSrc: string;
     isSheet: boolean;
+    rows?: 1 | 2;
+    rowIndex?: 0 | 1;
     name: string;
     x: number;
     y: number;
     tx: number;
     ty: number;
     arrived: boolean;
+    discId?: string; // 마당의 제자가 직접 걸어 나온 경우 — 그동안 그 제자의 수련 모습은 그리지 않는다
   }>({
     eventId: null,
     spriteSrc: '/assets/sp_enemy_top.jpg',
@@ -319,20 +357,33 @@ export const DojoSimView: React.FC<Props> = ({
   useEffect(() => {
     const ev = state.activeEvent;
     if (!ev) {
+      // 걸어 나왔던 제자는 그 자리에서 다시 마당 사람으로 돌아간다
+      const v = visitorRef.current;
+      const back = v.discId ? agentsRef.current.find((a) => a.id === v.discId) : undefined;
+      if (back) {
+        back.x = v.x;
+        back.y = v.y;
+        back.tx = v.x;
+        back.ty = v.y;
+      }
       visitorRef.current.eventId = null;
       visitorRef.current.arrived = true;
+      visitorRef.current.discId = undefined;
       return;
     }
-    const isDisc = ev.sceneActor === 'DISCIPLE';
-    const isSpouse = ev.sceneActor === 'SPOUSE';
-    const src =
-      ev.sceneActor === 'MERCHANT'
-        ? '/assets/sp_merchant_top.jpg'
-        : isDisc
-        ? '/assets/sheet_walk_disciple.jpg'
-        : isSpouse
-        ? '/assets/sheet_walk_female.jpg'
-        : '/assets/sp_enemy_top.jpg';
+    // 홀로 겪는 사건(깨달음·병·회상)은 대문으로 들어오는 방문자 없이 곧장 장면을 연다.
+    if (isSoloEvent(ev)) {
+      visitorRef.current.eventId = null;
+      visitorRef.current.arrived = true;
+      const t = window.setTimeout(() => onSceneReadyRef.current(), 450);
+      return () => window.clearTimeout(t);
+    }
+    const sp = state.spouse;
+    const isSpouse =
+      ev.sceneActor === 'SPOUSE' ||
+      (!ev.sceneActor && ev.category === 'FAMILY' && !!sp && sp.alive !== false && (!ev.speaker || ev.speaker.includes(sp.name)));
+    const walk = resolveVisitorWalk(ev, state, isSpouse);
+    const fromYard = walk.discId ? agentsRef.current.find((a) => a.id === walk.discId) : undefined;
 
     heroRef.current.tx = 460;
     heroRef.current.ty = 315;
@@ -340,14 +391,17 @@ export const DojoSimView: React.FC<Props> = ({
     camRef.current.targetX = 512;
     visitorRef.current = {
       eventId: ev.id,
-      spriteSrc: src,
-      isSheet: isDisc || isSpouse,
-      name: ev.speaker || '방문자',
-      x: 512,
-      y: 515,
+      spriteSrc: walk.src,
+      isSheet: walk.isSheet,
+      rows: walk.rows,
+      rowIndex: walk.rowIndex,
+      name: ev.speaker || (isSpouse && state.spouse ? state.spouse.name : '방문자'),
+      x: fromYard ? fromYard.x : walk.inside ? 600 : 512,
+      y: fromYard ? fromYard.y : walk.inside ? 205 : 515,
       tx: 560,
       ty: 315,
       arrived: false,
+      discId: fromYard ? fromYard.id : undefined,
     };
     sound.playDrum();
   }, [state.activeEvent?.id]);
@@ -555,6 +609,7 @@ export const DojoSimView: React.FC<Props> = ({
           agentsRef.current.forEach((ag) => {
             const disc = st.disciples.find((d) => d.id === ag.id);
             if (!disc || !discSheet) return;
+            if (vis.eventId && vis.discId === ag.id) return; // 지금 주인공에게 걸어가는 중
             let fIdx = 0;
             if (now < ag.practiceUntil) fIdx = now - ag.practiceStart < 420 ? 2 : 3;
             else if (ag.walkTick > 0) fIdx = Math.floor(ag.walkTick) % 2;
@@ -580,9 +635,10 @@ export const DojoSimView: React.FC<Props> = ({
           }
 
           if (vis.eventId) {
-            const vSheet = vis.isSheet ? getSpriteSheet(vis.spriteSrc, 4) : null;
+            const vSheet = vis.isSheet ? getGridSpriteSheet(vis.spriteSrc, 4, vis.rows || 1) : null;
             const vSp = !vis.isSheet ? getChromaSprite(vis.spriteSrc) : null;
-            const vFrame = vSheet ? vSheet.frames[vis.arrived ? 0 : Math.floor(now / 140) % 2] : vSp;
+            const vRow = (vis.rowIndex || 0) * 4;
+            const vFrame = vSheet ? vSheet.frames[vRow + (vis.arrived ? 0 : Math.floor(now / 140) % 2)] || vSheet.frames[0] : vSp;
             const vRefH = vSheet ? vSheet.refHeight : vSp?.height || 180;
             units.push({
               y: vis.y,

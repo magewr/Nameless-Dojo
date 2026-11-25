@@ -721,7 +721,25 @@ export function getDojoMapSrc(country: 'KOREA' | 'CHINA' | 'JAPAN', yardLevel: n
   const isGrand = yardLevel >= 3;
   if (country === 'KOREA') return isGrand ? '/assets/px_dojo_kr_grand.jpg' : '/assets/px_dojo_kr_ruin.jpg';
   if (country === 'CHINA') return isGrand ? '/assets/px_dojo_cn_grand.jpg' : '/assets/px_dojo_cn_ruin.jpg';
+  if (country === 'JAPAN') return isGrand ? '/assets/px_dojo_jp_grand.jpg' : '/assets/px_dojo_jp_ruin.jpg';
   return isGrand ? '/assets/px_dojo_grand_map.jpg' : '/assets/px_dojo_ruin_map.jpg';
+}
+
+export function getBattleStageSrc(
+  country: 'KOREA' | 'CHINA' | 'JAPAN',
+  opts?: { isRealDuel?: boolean; isTournament?: boolean }
+): string {
+  if (opts?.isTournament) {
+    if (country === 'KOREA') return '/assets/px_battle_tourney_stage_kr.jpg';
+    if (country === 'CHINA') return '/assets/px_battle_tourney_stage_cn.jpg';
+    return '/assets/px_battle_tourney_stage_jp.jpg';
+  }
+  if (opts?.isRealDuel) {
+    if (country === 'KOREA') return '/assets/px_battle_duel_stage_kr.jpg';
+    if (country === 'CHINA') return '/assets/px_battle_duel_stage_cn.jpg';
+    return '/assets/px_battle_duel_stage.jpg';
+  }
+  return '/assets/px_battle_stage.jpg';
 }
 
 export function getHeroWalkSpriteInfo(
@@ -788,12 +806,28 @@ export function getEnemyFightGridSrc(
   weaponGroup: string
 ): string {
   const txt = `${enemyName} ${enemyTitle}`;
+  if (/(산군|호랑이|표범)/.test(txt)) return '/assets/grid_enemy_beast_tiger_8f.jpg';
+  if (/곰/.test(txt)) return '/assets/grid_enemy_beast_bear_8f.jpg';
+  if (/(늑대|들개)/.test(txt)) return '/assets/grid_enemy_beast_wolf_8f.jpg';
+  if (/멧돼지/.test(txt)) return '/assets/grid_enemy_beast_boar_8f.jpg';
   if (/(혈영|검마|뇌제|어전 검성|화룡검존|마도)/.test(txt)) return '/assets/grid_enemy_gm_demon_8f.jpg';
   if (/(검선|검존|검황|태극|무상대사|노고수|은둔|야규|장문인|검성|진인)/.test(txt)) return '/assets/grid_enemy_gm_sage_8f.jpg';
   if (/(여협|여검|여무사|설화|빙월|당문|홍련)/.test(txt)) return '/assets/grid_enemy_female_8f.jpg';
   if (weaponGroup === 'UNARMED' || /(택견|소림|담퇴|유술|권법|무승)/.test(txt)) return '/assets/grid_enemy_unarmed_8f.jpg';
   if (weaponGroup === 'POLEARM' || /(장창|창술|창호|관군|포도|금군|교관|토벌|철산장군|호조인)/.test(txt)) return '/assets/grid_enemy_polearm_8f.jpg';
   return '/assets/grid_fight_enemy_8f.jpg';
+}
+
+export function isBeastFightSheet(src: string): boolean {
+  return src.includes('grid_enemy_beast_');
+}
+
+export function getBeastKoIndex(enemySrc: string, yielded: boolean): number {
+  let base = 0;
+  if (enemySrc.includes('beast_bear')) base = 1;
+  else if (enemySrc.includes('beast_wolf')) base = 2;
+  else if (enemySrc.includes('beast_boar')) base = 3;
+  return yielded ? base + 4 : base;
 }
 
 export function getKoFallenIndex(opts: {
@@ -831,8 +865,15 @@ export function preloadAllGameArt() {
     '/assets/px_dojo_kr_grand.jpg',
     '/assets/px_dojo_cn_ruin.jpg',
     '/assets/px_dojo_cn_grand.jpg',
+    '/assets/px_dojo_jp_ruin.jpg',
+    '/assets/px_dojo_jp_grand.jpg',
     '/assets/px_battle_stage.jpg',
     '/assets/px_battle_duel_stage.jpg',
+    '/assets/px_battle_duel_stage_kr.jpg',
+    '/assets/px_battle_duel_stage_cn.jpg',
+    '/assets/px_battle_tourney_stage_kr.jpg',
+    '/assets/px_battle_tourney_stage_cn.jpg',
+    '/assets/px_battle_tourney_stage_jp.jpg',
     '/assets/grid_portraits_heroes_4x3.jpg',
     '/assets/grid_portraits_ages_4x3.jpg',
     '/assets/grid_portraits_npcs_4x3.jpg',

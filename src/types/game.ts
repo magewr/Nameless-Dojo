@@ -416,6 +416,7 @@ export interface Disciple {
   gender?: Gender;
   age: number;
   isChild?: boolean;
+  adopted?: boolean; // 거두어 기르는 아이 — 어린 문하생으로 자라지만 혈육(친자녀)은 아니다
   childTalent?: 'PRODIGY' | 'DILIGENT' | 'SCHOLAR';
   talentElement?: SkillElement;
   talentWeapon?: WeaponGroup;
@@ -718,6 +719,12 @@ export interface GameState {
     journeyCount?: number;
     tourneyHistory?: TourneyRecord[];
     homeEventLast?: Record<string, number>; // 생성형 도장 사건마다 마지막으로 일어난 턴 (같은 틀이 연달아 나오지 않게)
+    // 같은 장면이 되풀이되지 않게 남기는 기록 (구버전 세이브에는 없다 — 빈 기록으로 취급)
+    //  '<사건키>:<변주id>' → 그 변주를 마지막으로 본 턴
+    //  'road:<사건키>'      → 길 위 장소 사건을 마지막으로 만난 무사수행 차수 (journeyCount)
+    //  'road#<사건키>'      → 길 위 장소 사건을 일생에 만난 횟수
+    eventSeen?: Record<string, number>;
+    abdicated?: { year: number; heirId: string; heirName: string } | null; // 후계자에게 도장을 물려주고 원로(상왕)로 물러났는가
     tutorialDone?: boolean;
     grandmasterWins?: number;
     tournamentWins?: number;

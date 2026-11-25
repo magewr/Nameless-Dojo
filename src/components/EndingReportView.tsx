@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { GameState, LegacyRecord } from '../types/game';
 import { ChronicleCause, COUNTRIES, generatePostMortemEnding, SEASON_META } from '../data/worldAndEndings';
 import { BOOK_SKILL_TEMPLATES, MASTERY_NAMES } from '../data/booksAndSkills';
-import { getDojoMapSrc } from '../pixel/spriteLoader';
+import { getBattleStageSrc, getDojoMapSrc } from '../pixel/spriteLoader';
 import { appendLegacyRecord, clearGameState, hasUnlockedHellDifficulty, markGameCleared } from '../engine/storage';
 import { getDifficultyConfig } from '../data/difficulty';
 import { PixelPortrait } from './PixelPortrait';
@@ -51,7 +51,8 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
 
   // 임종 → 장례식·계승 → 사후 19세기 → 20세기 → 2026년 현대 시네마틱 컷신 시퀀스!
   const scenes: EndingScene[] = useMemo(() => {
-    const isDuelDeath = state.deathCause === '진검결투 전사';
+    // 무사수행 중 전사는 '진검결투 전사 (무사수행)'으로 기록된다 — 접두로 봐야 임종 장면이 평온한 겨울 병상으로 잘못 나오지 않는다.
+    const isDuelDeath = (state.deathCause || '').startsWith('진검결투 전사');
     const isForbiddenDeath = state.deathCause === '주화입마 반동사';
 
     const deathLine1 = isDuelDeath
@@ -66,15 +67,22 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
       ? '“……결국 끝을 보았구나. 후회하지는 않는다. 이 경지 너머는…… 다음 세대에 맡기마.”'
       : '“횡베기 하나, 종베기 하나에서 시작했는데…… 참 멀리도 왔구나. 이제 내 뒤는…… 너희가 지켜 다오.”';
 
+    const isExtinct = report.chronicle[0]?.badge === '단절';
+    const deathBg = isDuelDeath
+      ? getBattleStageSrc(state.country, { isRealDuel: true })
+      : isForbiddenDeath
+      ? '/assets/px_end_forbidden.jpg'
+      : '/assets/px_end_death.jpg';
+
     const list: EndingScene[] = [
       {
-        bg: isDuelDeath ? '/assets/px_battle_duel_stage.jpg' : '/assets/px_end_death.jpg',
+        bg: deathBg,
         eraBadge: `${state.year}년 · 향년 ${state.age}세`,
         title: isDuelDeath ? '최후의 진검' : isForbiddenDeath ? '불타오른 경맥' : '겨울밤의 영면',
         text: deathLine1,
       },
       {
-        bg: isDuelDeath ? '/assets/px_battle_duel_stage.jpg' : '/assets/px_end_death.jpg',
+        bg: deathBg,
         eraBadge: `${state.name}의 마지막 말`,
         title: '남겨진 유언',
         speaker: `${state.name} (${state.age}세)`,
@@ -83,7 +91,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
         subNote: '가느다란 숨이 멎었다. 한 시대를 살다 간 무인의 일생이 조용히 막을 내렸다. — 그러나 이야기는 아직 끝나지 않았다.',
       },
       {
-        bg: getDojoMapSrc(state.country, state.facilities.yard),
+        bg: isExtinct ? getDojoMapSrc(state.country, 1) : '/assets/px_end_funeral.jpg',
         eraBadge: `${state.year}년 · 장례와 계승`,
         title: `【${state.sectName}】 그 이후`,
         text: `${report.funeralParagraph}\n\n${report.heirSummary}`,
@@ -441,7 +449,7 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
                 <div className="p-3.5 border border-[#6b4728] bg-[#1b120c] space-y-1.5">
                   <div className="font-bold text-sm text-[#fde68a]">유파 계승</div>
                   <p>창시자: {state.name} (1750~{state.year})</p>
-                  <p>배우자: {state.spouse ? state.spouse.name : '독신'}</p>
+                  <p>배우자: {state.spouse ? `${state.spouse.name}${state.spouse.alive ? '' : ' (먼저 떠남)'}` : '독신'}</p>
                   <p>{report.heirSummary}</p>
                 </div>
                 <div className="p-3.5 border border-[#6b4728] bg-[#1b120c] space-y-1.5">

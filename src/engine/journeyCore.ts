@@ -91,6 +91,7 @@ export interface JourneyEventDef {
   once?: boolean; // 일생에 한 번
   weight?: number;
   cooldown?: number; // 도장 생성형 사건: 다시 나오기까지의 계절 수 (기본 6)
+  elder?: boolean; // 노년(55세+)의 사건 — 도장 생성형 사건과 따로 뽑는다 (노년 몫의 자리에만 나온다)
   cond?: (s: GameState, r: JourneyRegion) => boolean;
   trigger?: JourneyTrigger;
   weightBy?: (s: GameState, r: JourneyRegion) => number; // 상황에 따른 가중치 배수 (예: 호환은 겨울에 잦다)
@@ -365,6 +366,11 @@ export function addPoiAhead(s: GameState, kind: JourneyPoiKind, eventKey: string
 export function clearAmbushes(s: GameState): GameState {
   return s.journey ? { ...s, journey: { ...s.journey, ambushAt: [] } } : s;
 }
+
+// ───────── 변주 고르기 — 같은 사건이라도 최근에 본 장면은 피한다 ─────────
+// 구현은 engine/fresh.ts (고정 사건을 만드는 events.ts도 쓰므로 의존성 없는 모듈로 뺐다). 쓰는 법은 그 파일의 설명.
+export { freshFactor, noteSeen, pickFresh, seenAt } from './fresh';
+export type { FreshVariant } from './fresh';
 
 // ───────── 대사 한 줄 만들기 ─────────
 export const N = (text: string): SceneDialogueLine => ({ speaker: '나레이션', role: 'NARRATOR', text });

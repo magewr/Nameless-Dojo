@@ -102,8 +102,8 @@ export const DisciplesAndFamilyModal: React.FC<Props> = ({
                       <div className="text-rose-300 font-bold">♥ 배우자</div>
                       {state.spouse ? (
                         <>
-                          <div className="font-bold text-sm text-[#fde68a] truncate">{state.spouse.name} ({state.spouse.age}세)</div>
-                          <div className="text-[11px] text-[#c7b394] truncate">{state.spouse.bonusDesc}</div>
+                          <div className="font-bold text-sm text-[#fde68a] truncate">{state.spouse.name} ({state.spouse.alive ? `${state.spouse.age}세` : '故'})</div>
+                          <div className="text-[11px] text-[#c7b394] truncate">{state.spouse.alive ? state.spouse.bonusDesc : '먼저 세상을 떠났다'}</div>
                         </>
                       ) : (
                         <div className="text-[#c7b394]">미혼</div>
@@ -186,18 +186,22 @@ export const DisciplesAndFamilyModal: React.FC<Props> = ({
                   <div className="flex items-center gap-2.5">
                     <PixelPortrait role="SPOUSE" country={state.country} age={state.age} gender={state.spouse?.gender || (state.gender === 'FEMALE' ? 'MALE' : 'FEMALE')} variantHint={state.spouse?.name} size={52} />
                     <div>
-                      <div className="font-bold text-base text-[#fde68a]">{state.spouse.name} ({state.spouse.age}세)</div>
-                      <div className="text-[11px] text-rose-300">도장의 반려자</div>
+                      <div className="font-bold text-base text-[#fde68a]">{state.spouse.name} ({state.spouse.alive ? `${state.spouse.age}세` : '故'})</div>
+                      <div className="text-[11px] text-rose-300">{state.spouse.alive ? '도장의 반려자' : '먼저 떠난 반려자'}</div>
                     </div>
                   </div>
                   <button onClick={() => setDetailNpc(null)} className="cursor-pointer"><X className="w-5 h-5" /></button>
                 </div>
                 <p className="text-xs leading-relaxed text-[#f5e9ce]">
-                  풍파 많은 무명도장의 곁을 지키며 평생을 함께 걷는 반려자입니다. 도장의 살림과 제자들을 돌보며 당신이 무도에 전념할 수 있도록 힘을 보탭니다.
+                  {state.spouse.alive
+                    ? '풍파 많은 무명도장의 곁을 지키며 평생을 함께 걷는 반려자입니다. 도장의 살림과 제자들을 돌보며 당신이 무도에 전념할 수 있도록 힘을 보탭니다.'
+                    : `${state.spouse.marriedYear}년에 혼례를 올리고 평생 곁을 지켰던 반려자입니다. 이제는 무덤가의 풀을 뽑으며 도장 이야기를 들려줄 뿐입니다.`}
                 </p>
-                <div className="p-2.5 bg-[#1b120c] border border-rose-400/60 text-xs text-rose-200">
-                  ♥ 동행 효과: {state.spouse.bonusDesc}
-                </div>
+                {state.spouse.alive && (
+                  <div className="p-2.5 bg-[#1b120c] border border-rose-400/60 text-xs text-rose-200">
+                    ♥ 동행 효과: {state.spouse.bonusDesc}
+                  </div>
+                )}
               </>
             )}
 

@@ -4,6 +4,7 @@ import { getDifficultyConfig, getDifficultyId } from './difficulty';
 import { ALLY_PERK, bestSect, getSects, getSectStance, metSects, sectTag, worstSect } from './sects';
 import { isTroublemaker } from './temperament';
 import { COUNTRIES } from './worldAndEndings';
+import { pickFresh } from '../engine/fresh';
 
 // 타 문파와의 사건 · 문하생이 일으키는 말썽 · 반란.
 // 여기서는 이벤트를 "고르기만" 한다. 상태를 바꾸는 일은 engine/sectLogic의 resolveSectEvent가 맡는다.
@@ -292,16 +293,43 @@ function buildShakedown(state: GameState, s: SectState): ActiveEvent {
     options.push({ id: 'shake_mediate', label: `${sectTag(mediator.name)}에 중재를 청한다`, hint: `돈도 피도 들지 않는다 · ${short(mediator.name)} 관계 -5 (신세)` });
   }
   options.push({ id: 'shake_refuse', label: '대문을 닫아걸고 상대하지 않는다', hint: '관계 -10 · 명성 -5' });
+  // 같은 문파가 또 와도 찾아오는 꼴은 매번 다르다 (최근에 본 장면은 피한다 — engine/fresh)
+  const scene = pickFresh(state, 'sect_shakedown', [
+    {
+      id: 'kick',
+      title: `${short(s.name)}의 자릿세 요구`,
+      narration: `${sectTag(s.name)}의 무뢰배 여럿이 대문을 발로 차고 들어왔다. 맨 앞에 선 ${josa(s.champion, '이가')} 마당에 침을 뱉는다.`,
+      dialogue: `“이 장터에서 도장 간판을 걸려면 ${s.leaderTitle}님께 자릿세를 내는 게 법도다. 다달이 ${cost}${cur}. 싫으면 이 간판은 오늘로 내려간다.”`,
+    },
+    {
+      id: 'notice',
+      title: `장터에 나붙은 ${short(s.name)}의 방(榜)`,
+      narration: `장터 어귀에 ${sectTag(s.name)}의 방이 나붙었다. 「이 고을에서 칼을 가르치는 자는 다달이 예를 갖출 것」. 그날 오후, ${josa(s.champion, '이가')} 졸개들을 끌고 대문 앞에 섰다.`,
+      dialogue: `“방은 읽어 봤겠지? 다달이 ${cost}${cur}. ${s.leaderTitle}님 체면을 봐서 이번 달은 웃으며 받으러 왔다.”`,
+    },
+    {
+      id: 'errand',
+      title: `코피를 흘리며 돌아온 문하생 — ${short(s.name)}의 경고`,
+      narration: `장에 심부름 갔던 문하생이 코피를 흘리며 돌아왔다. 뒤따라 ${sectTag(s.name)}의 ${josa(s.champion, '이가')} 느긋하게 대문을 넘어온다.`,
+      dialogue: `“애들 단속 좀 하시지. 우리 구역에서 장을 보려면 자릿세부터 내는 법이오. 다달이 ${cost}${cur}.”`,
+    },
+    {
+      id: 'gift',
+      title: `${short(s.name)}의 웃는 얼굴`,
+      narration: `비단옷을 걸친 ${josa(s.champion, '이가')} 선물 상자를 들고 찾아왔다. 얼굴은 웃고 있지만, 뒤에 선 졸개들의 손은 칼자루에 가 있다.`,
+      dialogue: `“${s.leaderTitle}께서 이웃끼리 잘 지내자 하셨소. 다달이 ${cost}${cur}만 성의를 보이시면, 이 도장에 궂은일은 없을 거요.”`,
+    },
+  ]);
   return {
     id: `sect_shakedown_${state.turn}`,
-    title: `${short(s.name)}의 자릿세 요구`,
+    title: scene.title,
     category: 'DUEL',
     sceneActor: 'ENEMY',
-    narration: `${sectTag(s.name)}의 무뢰배 여럿이 대문을 발로 차고 들어왔다. 맨 앞에 선 ${josa(s.champion, '이가')} 마당에 침을 뱉는다.`,
+    narration: scene.narration,
     speaker: s.champion,
-    dialogue: `“이 장터에서 도장 간판을 걸려면 ${s.leaderTitle}님께 자릿세를 내는 게 법도다. 다달이 ${cost}${cur}. 싫으면 이 간판은 오늘로 내려간다.”`,
+    dialogue: scene.dialogue,
     options,
-    meta: { sectId: s.id, allyId: mediator?.id, cost, isReal },
+    meta: { sectId: s.id, allyId: mediator?.id, cost, isReal, vkey: scene.id },
   };
 }
 
@@ -330,16 +358,22 @@ function buildRaid(state: GameState, s: SectState): ActiveEvent {
     options.push({ id: 'raid_ally', label: `${sectTag(ally.name)}에 급히 원군을 청한다`, hint: `위험 없이 격퇴 · ${short(ally.name)} 관계 -8 (큰 신세)` });
   }
   options.push({ id: 'raid_tribute', label: `은자를 내주고 돌려보낸다 (-${cost}${cur})`, hint: '관계 +15 · 명성 -15 · 권위 -10', ...(state.money < cost ? { disabled: true, disabledReason: '재화 부족' } : {}) });
+  const scene = pickFresh(state, 'sect_raid', [
+    { id: 'bar', title: `⚔ ${short(s.name)}의 습격`, narration: `한밤중에 대문 빗장이 부러졌다. 횃불을 든 ${sectTag(s.name)}의 무리가 마당으로 쏟아져 들어온다. 쌓이고 쌓인 원한이 오늘 밤 터진 것이다.` },
+    { id: 'dawn', title: `⚔ 새벽을 깬 ${short(s.name)}의 함성`, narration: `동트기 직전, 담장 너머에서 함성이 터졌다. ${sectTag(s.name)}의 무리가 사다리를 걸치고 담을 넘는다. 오래 묵은 원한이 끝내 칼끝으로 나온 것이다.` },
+    { id: 'market', title: `⚔ 장날의 기습 — ${short(s.name)}`, narration: `장날이라 문하생 절반이 장에 나간 한낮, ${sectTag(s.name)}의 무리가 그 틈을 노려 대문을 들이받았다.` },
+    { id: 'snow', when: (st: GameState) => st.season === 'WINTER', title: `⚔ 눈발 속의 습격 — ${short(s.name)}`, narration: `눈발이 굵어진 저녁, 발자국 소리도 없이 ${sectTag(s.name)}의 무리가 도장을 에워쌌다. 횃불이 눈 속에서 붉게 번진다.` },
+  ]);
   return {
     id: `sect_raid_${state.turn}`,
-    title: `⚔ ${short(s.name)}의 습격`,
+    title: scene.title,
     category: 'DUEL',
     sceneActor: 'ENEMY',
-    narration: `한밤중에 대문 빗장이 부러졌다. 횃불을 든 ${sectTag(s.name)}의 무리가 마당으로 쏟아져 들어온다. 쌓이고 쌓인 원한이 오늘 밤 터진 것이다.`,
+    narration: scene.narration,
     speaker: `${s.leaderTitle} ${s.leader}`,
     dialogue: `“【${state.sectName}】, 그동안 눈에 거슬렸다. 오늘 이 간판을 내리고 창고를 비우겠다.”`,
     options,
-    meta: { sectId: s.id, allyId: ally?.id, cost, isReal },
+    meta: { sectId: s.id, allyId: ally?.id, cost, isReal, vkey: scene.id },
   };
 }
 
@@ -377,20 +411,35 @@ function buildExchange(state: GameState, s: SectState): ActiveEvent {
     hint: isMerchant ? '재화↑ · 상무 +6 · 관계 +4' : '통찰 +3 · 정신 +2 · 구도 +3 · 관계 +4',
   });
   options.push({ id: 'exch_decline', label: '바쁜 철이라며 사양한다', hint: '관계 -4' });
+  // 같은 제안이라도 꼴은 매번 다르다 (engine/fresh)
+  const scene = pickFresh(
+    state,
+    'sect_exchange',
+    isMerchant
+      ? [
+          { id: 'm_cargo', title: `${short(s.name)}의 교류 제안`, narration: `${sectTag(s.name)}에서 사람이 왔다. 큰 짐이 움직이는데 믿고 맡길 손이 모자란다고 한다.` },
+          { id: 'm_salt', title: `고개를 넘는 ${short(s.name)}의 소금 수레`, narration: `${sectTag(s.name)}에서 사람이 왔다. 소금 수레 스무 대가 고개를 넘어야 하는데, 그 고개에 산적이 들끓는다고 한다.` },
+          { id: 'm_silver', title: `${short(s.name)}의 은괴 운송`, narration: `${sectTag(s.name)}에서 사람이 왔다. 은괴를 실은 수레가 이웃 고을로 가는데, 믿을 만한 칼이 곁에 있어야 한다고 한다.` },
+        ]
+      : [
+          { id: 'train', title: `${short(s.name)}의 교류 제안`, narration: `${sectTag(s.name)}에서 사람이 왔다. 두 문파의 문하생들이 한 철 함께 수련하면 어떻겠느냐는 것이다.` },
+          { id: 'letter', title: `${short(s.name)}에서 온 서찰`, narration: `${sectTag(s.name)}의 ${josa(s.leaderTitle, '이가')} 보낸 서찰이 왔다. 정갈한 글씨로, 두 문파가 한 철 문하생을 섞어 가르쳐 보자고 적혀 있다.` },
+          { id: 'demo', title: `합동 연무 제안 — ${short(s.name)}`, narration: `${sectTag(s.name)}에서 사람이 왔다. 고을 잔치에서 두 문파가 함께 연무를 펼치고, 그 뒤로 한 철 문하생들을 섞어 수련시키자는 것이다.` },
+          { id: 'retreat', title: `산중 암자의 합동 수련 — ${short(s.name)}`, narration: `${sectTag(s.name)}에서 전갈이 왔다. 산속 암자를 한 철 빌려 두 문파 문하생들이 함께 수련하자는 것이다.` },
+        ]
+  );
   return {
     id: `sect_exchange_${state.turn}`,
-    title: `${short(s.name)}의 교류 제안`,
+    title: scene.title,
     category: 'LIFE',
     sceneActor: isMerchant ? 'MERCHANT' : 'RIVAL',
-    narration: isMerchant
-      ? `${sectTag(s.name)}에서 사람이 왔다. 큰 짐이 움직이는데 믿고 맡길 손이 모자란다고 한다.`
-      : `${sectTag(s.name)}에서 사람이 왔다. 두 문파의 문하생들이 한 철 함께 수련하면 어떻겠느냐는 것이다.`,
+    narration: scene.narration,
     speaker: `${short(s.name)} 사절`,
     dialogue: isMerchant
       ? `“${s.leaderTitle}께서 【${state.sectName}】이라면 믿을 수 있다 하셨습니다. 삯은 섭섭지 않게 쳐 드리겠습니다.”`
       : `“${s.leaderTitle}께서 ‘남의 칼을 보아야 제 칼이 보인다’ 하셨습니다. 문하생들을 보내 주시겠습니까?”`,
     options,
-    meta: { sectId: s.id },
+    meta: { sectId: s.id, vkey: scene.id },
   };
 }
 
@@ -476,9 +525,43 @@ function pickSectEvent(state: GameState): ActiveEvent | null {
 
 // ---------------------------------------------------------------- 진입점
 
+// 같은 종류의 문파 사건·말썽이 촘촘히 되풀이되지 않게 (계절 수, 노년에는 1.5배)
+const DRAMA_GAP: Record<string, number> = {
+  trouble_brawl: 5,
+  trouble_bully: 5,
+  trouble_theft: 5,
+  trouble_gamble: 5,
+  trouble_tipoff: 6,
+  trouble_poach: 6,
+  sect_envoy: 6,
+  sect_exchange: 6,
+  sect_alliance: 6,
+  sect_aid: 6,
+  sect_peace: 6,
+  sect_shakedown: 6,
+};
+function dramaCooling(state: GameState, ev: ActiveEvent | null): boolean {
+  if (!ev) return false;
+  const base = ev.id.replace(/_\d+$/, '');
+  const gap = DRAMA_GAP[base];
+  const last = state.flags.homeEventLast?.[`@${base}`];
+  if (!gap || last === undefined) return false;
+  return state.turn - last < Math.round(gap * (state.age >= 55 ? 1.5 : 1));
+}
+
 export function pickDramaEvent(state: GameState): ActiveEvent | null {
+  const ev = pickDramaEventRaw(state);
+  // 반란은 간격과 상관없이 터진다
+  if (ev && !ev.id.startsWith('rebellion') && dramaCooling(state, ev)) return null;
+  return ev;
+}
+
+function pickDramaEventRaw(state: GameState): ActiveEvent | null {
   if (state.turn < 8 || !state.sects) return null;
-  const cfg = getDifficultyConfig(state);
+  // 양위하고 물러났다면 문하의 말썽과 문파 사이의 일은 대부분 종주가 맡는다
+  const baseCfg = getDifficultyConfig(state);
+  const retired = !!state.flags.abdicated && state.disciples.some((d) => d.id === state.flags.abdicated!.heirId && !d.dead);
+  const cfg = retired ? { ...baseCfg, troubleEventRate: baseCfg.troubleEventRate * 0.4, sectEventRate: baseCfg.sectEventRate * 0.5 } : baseCfg;
   const gap = state.turn - (state.flags.lastDramaTurn ?? -99);
 
   // 반란은 다른 무엇보다 먼저 터진다. (직전 턴에 다른 사건이 있었으면 한 철 미룬다)
