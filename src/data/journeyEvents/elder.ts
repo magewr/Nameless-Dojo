@@ -1075,7 +1075,7 @@ const palsun: JourneyEventDef = {
   }),
   resolve: (s, opt) => {
     const n = milestone(s, 'PALSUN', '여든을 넘겨 고을 최고령 노인이 되었다');
-    if (opt === 'thank') return say(addFame(addRep(n, { virtue: 10 }), 10), [['나레이션', '쌀 한 섬으로 떡을 쪄 온 고을에 돌렸다. 「도장 할아버지 떡」이라 불렸다.']]);
+    if (opt === 'thank') return say(addFame(addRep(n, { virtue: 10 }), 10), [['나레이션', `쌀 한 섬으로 떡을 쪄 온 고을에 돌렸다. 「도장 ${s.gender === 'FEMALE' ? '할머니' : '할아버지'} 떡」이라 불렸다.`]]);
     return say(addStats(n, { wil: 3 }), [['나레이션', '여든의 첫날도 칼을 쥐었다. 서른 번 휘두르고 쉬었다. 그래도 쥐었다.']]);
   },
 };

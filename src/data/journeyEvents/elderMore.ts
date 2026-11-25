@@ -169,7 +169,9 @@ const discBaby: JourneyEventDef = {
     const n = mapDisc(pushUsed(s, 'babies', id), id, (x) => ({ ...x, loyalty: x.loyalty + 5 }));
     if (opt === 'nudge') return say(addRep(n, { ruthless: 1 }), [['나레이션', '아이는 목검을 집어 들고 곧장 원로의 이마를 때렸다. 마당이 웃음바다가 되었다.']]);
     const got = rand(['붓', '실타래', '엽전', '목검']);
-    return say(addHealth(n, 3), [['나레이션', got === '목검' ? '아이가 망설임 없이 목검을 쥐었다. 아비가 환호했고, 원로는 모른 척 고개를 돌려 웃었다.' : `아이는 ${josa(got, '을를')} 쥐었다. 「칼잡이 집안에서 ${got}이라니」 하고 아비가 웃었다. 원로는 그게 더 좋았다.`]]);
+    // 아이를 안고 온 제자가 여제자면 「어미」다
+    const pw = n.disciples.find((x) => x.id === id)?.gender === 'FEMALE' ? '어미' : '아비';
+    return say(addHealth(n, 3), [['나레이션', got === '목검' ? `아이가 망설임 없이 목검을 쥐었다. ${pw}가 환호했고, 원로는 모른 척 고개를 돌려 웃었다.` : `아이는 ${josa(got, '을를')} 쥐었다. 「칼잡이 집안에서 ${got}이라니」 하고 ${pw}가 웃었다. 원로는 그게 더 좋았다.`]]);
   },
 };
 

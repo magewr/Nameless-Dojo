@@ -19,7 +19,7 @@ import {
   say,
   trainEquipped,
 } from '../../engine/journeyCore';
-import { makePersonName, randomSectName } from '../../engine/tourney';
+import { heroPowerEstimate, makePersonName, randomSectName, takenNames } from '../../engine/tourney';
 import { getMaxDisciples } from '../../engine/gameLogic';
 import { createDiscipleEntity } from '../events';
 import { josa } from '../../utils/korean';
@@ -198,7 +198,7 @@ const heirChallenged: JourneyEventDef = {
   cond: (s) => isRetired(s),
   build: (s) => {
     const h = heirOf(s)!;
-    const name = makePersonName(s.country);
+    const name = makePersonName(s.country, takenNames(s));
     const sect = randomSectName(s.country);
     const p = clampP(0.3 + heirPower(s) * 0.009 - (s.year - (s.flags.abdicated?.year || s.year) < 2 ? 0.08 : 0));
     return {
@@ -431,7 +431,7 @@ const lastDisciple: JourneyEventDef = {
   trigger: { age: [62, 80] },
   cond: (s) => hasRoom(s),
   build: (s) => {
-    const kid = makePersonName(s.country);
+    const kid = makePersonName(s.country, takenNames(s));
     const how = rand([
       { k: 'beggar', text: `장터 거지 아이가 사흘째 도장 담 밑에서 잔다. 제자들이 쫓아내도 다시 온다. 오늘은 마당 구석에서 나뭇가지로 스승의 초식을 따라 하고 있었다. 한 동작도 틀리지 않았다.` },
       { k: 'orphan', text: `이웃 마을이 홍수에 쓸렸다. 진흙투성이 아이 하나가 도장 대문을 붙들고 서 있다. 부모를 잃었다고 했다.` },
@@ -702,7 +702,7 @@ const storyTime: JourneyEventDef = {
       category: 'FAMILY',
       narration: `${josa(who, '이가')} 마루 끝에 쪼르르 앉아 이야기를 조른다.`,
       script: [
-        P('아이들', '할아버지, 옛날이야기! 칼 이야기!', '무릎에 매달리며'),
+        P('아이들', `${s.gender === 'FEMALE' ? '할머니' : '할아버지'}, 옛날이야기! 칼 이야기!`, '무릎에 매달리며'),
         N(`${m.year}년, ${m.age}세. ${m.text}. 벌써 ${s.year - m.year}년 전 일이다.`),
       ],
       options: [
@@ -730,6 +730,8 @@ const CHALLENGERS = [
   { k: 'woman', who: '남장한 여검객', line: '천하 고수라는 분이 여인의 칼은 받지 않으시렵니까?', age: 22 },
   { k: 'foreign', who: '바다 건너온 검객', line: '이 나라에서 가장 오래 산 칼을 찾아왔소. 한 수 청하오.', age: 30 },
 ];
+// 젊은 도전자의 강함(주인공 대비). 노년 전투가 늘 이기는 싸움이 되지 않게 한다.
+const CHALLENGER_POWER = 1.1;
 const youngChallenger: JourneyEventDef = {
   key: 'elder_young_challenger',
   kind: 'HOME',
@@ -739,7 +741,11 @@ const youngChallenger: JourneyEventDef = {
   cond: (s) => CHALLENGERS.some((c) => !usedList(s, 'challengers').includes(c.k)),
   build: (s) => {
     const ch = rand(CHALLENGERS.filter((c) => !usedList(s, 'challengers').includes(c.k)));
-    const name = makePersonName(s.country);
+    // 바다 건너온 검객은 그 나라 이름을 쓴다 (조선·청에는 왜의 검객, 일본에는 조선·청의 검객)
+    const home = ch.k === 'foreign' ? (s.country === 'JAPAN' ? rand(['KOREA', 'CHINA'] as const) : 'JAPAN') : s.country;
+    const name = makePersonName(home, takenNames(s));
+    // 낭인의 반말은 주인공의 성별에 맞춘다 (여성 노고수에게 「영감」이라 부르지 않게)
+    const line = s.gender === 'FEMALE' ? ch.line.replace('영감', '할멈') : ch.line;
     const h = heirOf(s);
     const words = clampP(0.25 + s.stats.wil * 0.004 + s.stats.ins * 0.003);
     return {
@@ -747,13 +753,13 @@ const youngChallenger: JourneyEventDef = {
       category: 'DUEL',
       sceneActor: 'ENEMY',
       narration: `${ch.who} ${josa(name, '이가')} 대문 앞에서 이름을 외친다.`,
-      script: [P(name, ch.line, '칼자루에 손을 얹으며'), N(`${s.age}세의 몸이다. 무릎이 먼저 대답한다.`)],
+      script: [P(name, line, '칼자루에 손을 얹으며'), N(`${s.age}세의 몸이다. 무릎이 먼저 대답한다.`)],
       options: [
-        { id: 'fight', label: mem(s, 'cane') === 'YES' ? '지팡이를 내려놓고 목검을 든다' : '천천히 일어나 목검을 든다', hint: '비무 · 늙은 몸으로' },
+        { id: 'fight', label: mem(s, 'cane') === 'YES' ? '지팡이를 내려놓고 목검을 든다' : '천천히 일어나 목검을 든다', hint: '비무 · 늙은 몸으로 — 소문을 듣고 온 만만치 않은 상대' },
         { id: 'words', label: '마루에 앉은 채 한마디로 기를 꺾는다', hint: `정신·통찰 시험 ${pct(words)}` },
         ...(h && !h.isChild ? [{ id: 'heir', label: `「내 칼은 ${h.name}에게 있다」 — 후계자를 내보낸다`, hint: '후계자가 자란다' }] : []),
       ],
-      meta: { k: ch.k, name, age: ch.age, words },
+      meta: { k: ch.k, name, age: ch.age, words, home },
     };
   },
   resolve: (s, opt, c) => {
@@ -767,9 +773,11 @@ const youngChallenger: JourneyEventDef = {
         enemyTitle: '전설을 베러 온 자',
         age: Number(c.data?.age) || 25,
         ai: rand(['RUSHDOWN', 'AGGRESSIVE', 'DUELIST'] as const),
-        scale: roadScale(s, 0.8),
+        // 전설을 베겠다고 찾아올 정도면 진짜 강자다 — 길 위의 평범한 상대(roadScale)가 아니라 주인공의 실제 강함에 맞춘다.
+        scale: Math.min(4, Math.max(roadScale(s, 0.8), heroPowerEstimate(s) * CHALLENGER_POWER)),
         weapon: 'BLADE',
-        skills: byCountry(s, ['sk_kr_06', 'sk_kr_02', 'sk_kr_01'], ['sk_cn_05', 'sk_cn_03', 'sk_cn_02'], ['sk_jp_01', 'sk_jp_03', 'sk_jp_06']),
+        // 바다 건너온 검객은 제 나라의 초식을 쓴다
+        skills: byCountry({ ...s, country: (c.data?.home as GameState['country']) || s.country }, ['sk_kr_06', 'sk_kr_02', 'sk_kr_01'], ['sk_cn_05', 'sk_cn_03', 'sk_cn_02'], ['sk_jp_01', 'sk_jp_03', 'sk_jp_06']),
         rewardFame: 15,
       });
     if (opt === 'words') {
@@ -844,7 +852,7 @@ const youngDojo: JourneyEventDef = {
   once: true,
   trigger: { age: [58, 90] },
   build: (s) => {
-    const master = makePersonName(s.country);
+    const master = makePersonName(s.country, takenNames(s));
     return {
       title: '길 건너의 새 도장',
       category: 'LIFE',

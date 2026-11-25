@@ -23,7 +23,7 @@ import {
   takeEcho,
   trainEquipped,
 } from '../../engine/journeyCore';
-import { fighterPower, makePersonName, randomSectName } from '../../engine/tourney';
+import { fighterPower, makePersonName, randomSectName, takenNames } from '../../engine/tourney';
 import { adjustRelation } from '../../engine/sectLogic';
 import { metSects } from '../sects';
 import { rumorsFor } from '../journeyRegions';
@@ -59,9 +59,11 @@ const challenge: JourneyEventDef = {
   weightBy: (s) => (s.age >= 66 ? 0.4 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 10 && s.fame >= 80,
   build: (s) => {
-    const roster = (s.tourneyRoster || []).filter((f) => !f.retired && s.year - f.bornYear < 65);
+    const taken = takenNames(s);
+    // 명부의 고수라도 내 제자·배우자·숙적과 이름이 같으면 고르지 않는다 (「도전장 — 개방의 조자룡」이 죽은 제자처럼 읽힌다)
+    const roster = (s.tourneyRoster || []).filter((f) => !f.retired && s.year - f.bornYear < 65 && !taken.has(f.name));
     const f = roster.length ? rand(roster) : null;
-    const name = f?.name || makePersonName(s.country);
+    const name = f?.name || makePersonName(s.country, taken);
     const sect = f?.sect || randomSectName(s.country);
     const power = f ? fighterPower(f, s.year) : roadScale(s, 0.9 + Math.random() * 0.4);
     const record = f && f.titles > 0 ? `천하대회 우승 ${f.titles}회의 ` : f && (f.bestRound ?? -1) >= 2 ? '지난 천하대회 4강의 ' : '';
@@ -452,7 +454,7 @@ const neighbor: JourneyEventDef = {
   cond: (s) => s.turn >= 8,
   build: (s) => {
     const sect = metSects(s).length ? rand(metSects(s)) : null;
-    const name = sect?.name || `${makePersonName(s.country).slice(0, 2)} 도장`;
+    const name = sect?.name || `${makePersonName(s.country, takenNames(s)).slice(0, 2)} 도장`;
     const cause = rand([
       { k: 'land', text: '도장 뒷산 땅이 원래 자기네 것이라며 말뚝을 박아 놓았다.' },
       { k: 'poach', text: '우리 문하생에게 「월사금 반값」을 미끼로 옮겨 오라 꼬드겼다.' },
@@ -531,7 +533,7 @@ const oldFriend: JourneyEventDef = {
   kind: 'HOME',
   cond: (s) => s.turn >= 10 && !(s.flags.echoes || []).some((e) => e.key === 'loan_friend'),
   build: (s) => {
-    const name = makePersonName(s.country);
+    const name = makePersonName(s.country, takenNames(s));
     return {
       title: `어릴 적 동무 ${name}`,
       category: 'LIFE',
@@ -590,7 +592,7 @@ const wanted: JourneyEventDef = {
   weightBy: (s) => (s.age >= 70 ? 0.1 : s.age >= 60 ? 0.3 : 1), // 노년에는 드물게
   cond: (s) => s.turn >= 6,
   build: (s) => {
-    const name = makePersonName(s.country);
+    const name = makePersonName(s.country, takenNames(s));
     const crime = rand(['역참 습격', '관곡 탈취', '살인 강도', '사찰 방화']);
     const bounty = 60 + Math.floor(Math.random() * 80);
     return {

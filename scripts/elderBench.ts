@@ -123,6 +123,8 @@ const CHAIN_ORDER: Array<[string, string]> = [
   ['elder_heir_lost', 'elder_abdication'],
   ['elder_disc_baby', 'elder_disc_wedding'],
 ];
+// 노년(55+) 전투의 사건별 승률 — 100%에 붙어 있으면 긴장감 없는 싸움이다
+const elderBattle = new Map<string, { n: number; w: number }>();
 const countries: CountryId[] = ['KOREA', 'CHINA', 'JAPAN'];
 const diffs: DifficultyId[] = ['EASY', 'EASY', 'HARD', 'HELL']; // 노년까지 사는 일생을 넉넉히 보려고 쉬움 비중을 높인다
 
@@ -194,6 +196,7 @@ for (let run = 0; run < RUNS; run++) {
         st = applyBattleOutcome(st, out);
         st = { ...st, pendingNotice: null };
         if (st.age >= 55) lines.push(`       ⚔ ${out.victory ? '승리' : '패배'} (${out.endedBy || ''})`);
+        if (st.age >= 55) { const r = elderBattle.get(kind) || { n: 0, w: 0 }; r.n++; if (out.victory) r.w++; elderBattle.set(kind, r); }
       }
     }
   };
@@ -279,6 +282,11 @@ const topOf = (m: Map<string, number>) => { const tot = [...m.values()].reduce((
 console.log(`  55+ 사건 구성: ${topOf(elderSource)}`);
 console.log(`  55+ 같은 제목 재등장의 출처: ${topOf(elderTitleRepeat)}`);
 console.log(`  55+ 이미 본 종류 재등장의 출처: ${topOf(elderKindRepeat)}`);
+{
+  const tot = [...elderBattle.values()].reduce((a, r) => ({ n: a.n + r.n, w: a.w + r.w }), { n: 0, w: 0 });
+  const rows = [...elderBattle.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 10).map(([k, r]) => `${k} ${Math.round((r.w / r.n) * 100)}%(${r.n})`);
+  console.log(`  55+ 전투 승률 ${tot.n ? Math.round((tot.w / tot.n) * 100) : 0}% (${tot.n}전) · ${rows.join(' · ')}`);
+}
 console.log(`  개연성 점검: ${problems.size === 0 ? '문제 없음' : [...problems.entries()].map(([k, v]) => `${k} ${v}건`).join(' · ')}`);
 problemSamples.slice(0, 40).forEach((p) => console.log(`    - ${p}`));
 fs.writeFileSync(OUT, timelines.join('\n\n'));

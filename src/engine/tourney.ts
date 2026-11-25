@@ -78,9 +78,24 @@ const STYLE_POOL: Record<CountryId, Array<{ ai: EnemyAiType; weapon: WeaponGroup
 };
 
 // 나라에 맞는 사람 이름 하나 (사건 생성기도 쓴다)
-export function makePersonName(country: CountryId): string {
+export function makePersonName(country: CountryId, avoid?: Set<string>): string {
   const pool = NAMES[country];
-  return country === 'JAPAN' ? `${pick(pool.sur)} ${pick(pool.given)}` : `${pick(pool.sur)}${pick(pool.given)}`;
+  let name = '';
+  for (let i = 0; i < 12; i++) {
+    name = country === 'JAPAN' ? `${pick(pool.sur)} ${pick(pool.given)}` : `${pick(pool.sur)}${pick(pool.given)}`;
+    if (!avoid || !avoid.has(name)) break;
+  }
+  return name;
+}
+
+// 이 일생에 이미 등장한 사람들의 이름 — 새로 만든 인물이 죽은 제자·배우자·숙적과 같은 이름이면
+// (「현상금 방 — 장무기」처럼) 죽은 제자가 살아 돌아온 듯 헷갈린다.
+export function takenNames(state: GameState): Set<string> {
+  const out = new Set<string>();
+  state.disciples.forEach((d) => out.add(d.name));
+  if (state.spouse) out.add(state.spouse.name);
+  if (state.rival?.name) out.add(state.rival.name);
+  return out;
 }
 
 export function randomSectName(country: CountryId): string {
@@ -166,7 +181,7 @@ function seedRoster(state: GameState): TourneyFighter[] {
 
 // 대회 사이의 세월 — 은퇴와 새 얼굴
 function refreshRoster(state: GameState, roster: TourneyFighter[]): TourneyFighter[] {
-  const used = new Set(roster.map((f) => f.name));
+  const used = new Set([...roster.map((f) => f.name), ...takenNames(state)]);
   let list = roster.map((f) => {
     if (f.retired) return f;
     const age = state.year - f.bornYear;

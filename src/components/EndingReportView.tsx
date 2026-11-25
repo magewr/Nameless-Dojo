@@ -51,7 +51,8 @@ export const EndingReportView: React.FC<Props> = ({ state, onReturnTitle }) => {
 
   // 임종 → 장례식·계승 → 사후 19세기 → 20세기 → 2026년 현대 시네마틱 컷신 시퀀스!
   const scenes: EndingScene[] = useMemo(() => {
-    const isDuelDeath = state.deathCause === '진검결투 전사';
+    // 무사수행 중 전사는 '진검결투 전사 (무사수행)'으로 기록된다 — 접두로 봐야 임종 장면이 평온한 겨울 병상으로 잘못 나오지 않는다.
+    const isDuelDeath = (state.deathCause || '').startsWith('진검결투 전사');
     const isForbiddenDeath = state.deathCause === '주화입마 반동사';
 
     const deathLine1 = isDuelDeath

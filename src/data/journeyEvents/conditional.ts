@@ -24,7 +24,7 @@ import {
 } from '../../engine/journeyCore';
 import { createDiscipleEntity } from '../events';
 import { getMaxDisciples } from '../../engine/gameLogic';
-import { makePersonName } from '../../engine/tourney';
+import { makePersonName, takenNames } from '../../engine/tourney';
 import { josa } from '../../utils/korean';
 
 // 주인공의 상태·이력에 따라 발동하는 길 위의 사건.
@@ -53,7 +53,7 @@ export const CONDITIONAL_EVENTS: JourneyEventDef[] = [
     resolve: (s, opt, c) => {
       if (opt === 'hide') return say(s, [['나레이션', '이름이 알려지면 조용히 밥 먹기도 어렵다.']]);
       if (opt === 'teach') return say(addRep(addFame(spendDays(s, 1), 15), { ascetic: 6, virtue: 4 }), [['나레이션', '젊은이들이 해가 질 때까지 마당을 떠나지 않았다. (명성 +15)']]);
-      return journeyBattle(s, c, opt, { stakes: 'SPAR', title: '주막 마당의 한 합', subtitle: '선배에게 도전하는 젊은 무사', name: makePersonName(s.country), enemyTitle: '무사수행 중인 젊은이', age: 22, ai: 'RUSHDOWN', scale: roadScale(s, 0.85), weapon: 'BLADE', skills: byCountry(s, ['sk_kr_01', 'sk_kr_06', 'base_h_slash'], ['sk_cn_01', 'sk_cn_05', 'base_h_slash'], ['sk_jp_03', 'sk_jp_01', 'base_h_slash']), rewardFame: 15 });
+      return journeyBattle(s, c, opt, { stakes: 'SPAR', title: '주막 마당의 한 합', subtitle: '선배에게 도전하는 젊은 무사', name: makePersonName(s.country, takenNames(s)), enemyTitle: '무사수행 중인 젊은이', age: 22, ai: 'RUSHDOWN', scale: roadScale(s, 0.85), weapon: 'BLADE', skills: byCountry(s, ['sk_kr_01', 'sk_kr_06', 'base_h_slash'], ['sk_cn_01', 'sk_cn_05', 'base_h_slash'], ['sk_jp_03', 'sk_jp_01', 'base_h_slash']), rewardFame: 15 });
     },
     onBattle: (s, _opt, won) => say(won ? addRep(s, { ascetic: 4 }) : addFame(s, -15), [['나레이션', won ? '젊은이가 땅에 이마를 댔다. 「평생 오늘을 잊지 않겠습니다.」' : '젊은이의 칼끝이 먼저 닿았다. 주막이 술렁였다. 소문은 발이 빠르다.']]),
   },

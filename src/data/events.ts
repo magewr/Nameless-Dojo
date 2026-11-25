@@ -98,6 +98,10 @@ const FIXED_EVENT_GAP: Record<string, number> = {
   life_wandering_tea: 10,
   life_famine_tuition: 8,
   blood_grudge: 4,
+  // 어려움·지옥의 재난은 위협으로 남기되, 같은 재난이 몇 계절 만에 다시 덮치는 반복은 막는다.
+  disaster_nature: 6,
+  disaster_plague: 8,
+  realduel_assassin: 4,
 };
 export function fixedGapCooling(state: GameState, baseKey: string, gapOverride?: number): boolean {
   const gap = gapOverride ?? FIXED_EVENT_GAP[baseKey];
@@ -1957,7 +1961,14 @@ export function createDiscipleEntity(
   }
 ): Disciple {
   const cMeta = COUNTRIES[state.country];
-  const usedNames = new Set([...state.disciples.map((d) => d.name), ...(state.graduatedDisciples || []).map((g) => g.name)]);
+  // 천하대회 명부의 고수·숙적·배우자와 같은 이름의 제자가 들어오면 대진표와 사건 제목에서 서로 헷갈린다.
+  const usedNames = new Set([
+    ...state.disciples.map((d) => d.name),
+    ...(state.graduatedDisciples || []).map((g) => g.name),
+    ...(state.tourneyRoster || []).map((f) => f.name),
+    ...(state.spouse ? [state.spouse.name] : []),
+    ...(state.rival?.name ? [state.rival.name] : []),
+  ]);
   const pool = cMeta.discipleNames.filter((n) => !usedNames.has(n));
   const name = opts?.name || pool[Math.floor(Math.random() * pool.length)] || makeExtraDiscipleName(state, usedNames);
   const archetypes = ['우직한 농부 아들', '몰락 무사', '장터 고아', '서당 학동', '부두 인부', '명문가 자제', '방랑 낭인'];
