@@ -17,6 +17,7 @@ import { COUNTRIES } from '../data/worldAndEndings';
 import { getDifficultyConfig } from '../data/difficulty';
 import { JourneyLeg, JourneyRegion, JourneyTerrain } from '../data/journeyRegions';
 import { getJourneyMap, pickPoiTile } from '../data/journeyMap';
+import { getAreaMap } from '../data/journeyAreas';
 import { addLog } from './log';
 import { gainSkillExp, getBreakthroughChance, getMaxHealthByAge, isSeclusionContinuing } from './gameLogic';
 
@@ -358,11 +359,23 @@ export function journeyBattle(
 export function addPoiAhead(s: GameState, kind: JourneyPoiKind, eventKey: string, label: string): GameState {
   const j = s.journey;
   if (!j) return s;
-  const m = getJourneyMap(j.regionId);
-  const occupied = [...j.pois, { tx: j.pos.x, ty: j.pos.y }];
-  const spot = pickPoiTile(m, j.legId, kind, occupied, { x: j.pos.x, y: j.pos.y, min: 3, max: 9 });
+  // 지금 서 있는 지도(구역 지도 또는 바깥 지도) 위에 놓는다 — 소문으로 알게 된 곳이니 숨기지 않는다
+  const m = j.area ? getAreaMap(j.area) : getJourneyMap(j.regionId);
+  const here = j.pois.filter((p) => (p.area || null) === (j.area || null));
+  const occupied = [...here, { tx: j.pos.x, ty: j.pos.y }];
+  const zoneLeg = j.area ? j.area : j.legId;
+  const spot = pickPoiTile(m, zoneLeg, kind, occupied, { x: j.pos.x, y: j.pos.y, min: 3, max: j.area ? 14 : 9 });
   if (!spot) return s;
-  const poi = { id: `poi_add_${s.turn}_${Math.random().toString(36).slice(2, 6)}`, kind, eventKey, tx: spot.x, ty: spot.y, legId: j.legId, label };
+  const poi = {
+    id: `poi_add_${s.turn}_${Math.random().toString(36).slice(2, 6)}`,
+    kind,
+    eventKey,
+    tx: spot.x,
+    ty: spot.y,
+    legId: j.legId,
+    ...(j.area ? { area: j.area } : {}),
+    label,
+  };
   return { ...s, journey: { ...j, pois: [...j.pois, poi] } };
 }
 

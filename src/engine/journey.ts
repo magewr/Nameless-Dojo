@@ -10,7 +10,8 @@ import {
 } from '../types/game';
 import { ALL_JOURNEY_EVENTS, getJourneyEventDef } from '../data/journeyEvents';
 import { getLeg, getRegion, JOURNEY_DAYS_PER_SEASON, JourneyLeg, JourneyRegion, regionsForCountry, rumorsFor } from '../data/journeyRegions';
-import { findPath, getJourneyMap, pickPoiTile, tileAt, tileDays, TILE_INFO, zoneLegAt, zoneOf } from '../data/journeyMap';
+import { findPath, getJourneyMap, JourneyMap, TileKind, tileAt, tileDays, TILE_INFO, zoneLegAt, zoneOf } from '../data/journeyMap';
+import { decodeExplored, encodeExplored, getAreaMap, HIDDEN_KINDS, pickAreaPoiTile, revealAround } from '../data/journeyAreas';
 import { addFame, addHealth, highlight, JCtx, JourneyEventDef, isDone, markDone, triggerMet } from './journeyCore';
 import { noteSeen } from './fresh';
 import { getDifficultyId } from '../data/difficulty';
@@ -21,8 +22,42 @@ import { addLog } from './log';
 // ───────────────────────── 무사수행 진행 엔진 ─────────────────────────
 // 필드 화면(JourneyView)과 플레이테스트 봇이 함께 쓰는 순수 함수들.
 
-// 지도 위를 한 칸씩 걷는다. 칸마다 땅의 생김새에 따라 날수가 든다(길 0.6일, 들 0.85일, 숲 1.2일, 산비탈 1.5일 — journeyMap.ts).
-// 땅(구역)에 처음 발을 들이면 그 땅의 장소들이 놓이고, 장소가 놓인 칸을 밟으면 사건이 열린다.
+// 지도는 두 겹이다. 바깥 지도(지역 전도)에서 땅과 땅 사이를 오가고, 땅마다 있는 입구를 밟으면 그 땅의 구역 지도로 들어간다.
+// 구역 지도는 화면 여러 장 크기다 — 산은 벼랑 사이를 지그재그로 오르고, 사건은 길에서 벗어난 곳에 숨어 있다(journeyAreas.ts).
+// 칸마다 땅의 생김새에 따라 날수가 든다. 바깥 지도의 한 걸음은 하룻길에 가깝고, 구역 지도의 한 걸음은 그 몇 분의 일이다.
+// 구역 지도에 처음 들어서면 그 땅의 장소들이 놓이고, 장소가 놓인 칸을 밟으면 사건이 열린다.
+
+// 바깥 지도·구역 지도의 한 걸음에 드는 날수 배율
+export const OVER_DAYS = 0.6;
+export const AREA_DAYS = 0.075;
+
+export function currentMap(j: Pick<JourneyState, 'regionId' | 'area'>): JourneyMap {
+  return j.area ? getAreaMap(j.area) : getJourneyMap(j.regionId);
+}
+
+// 그 칸으로 한 걸음 들어가는 데 드는 날수
+export function stepDays(j: Pick<JourneyState, 'area'>, t: TileKind, season: GameState['season']): number {
+  return Math.round(tileDays(t, season) * (j.area ? AREA_DAYS : OVER_DAYS) * 1000) / 1000;
+}
+
+// 지금 서 있는 지도 위의 장소들
+export function poisOnMap(j: JourneyState): JourneyPoi[] {
+  const a = j.area || null;
+  return j.pois.filter((p) => (p.area || null) === a);
+}
+
+// 장소가 지금 보이는가 — 숨은 장소는 찾아야 보이고, 구역 지도에서는 둘러본 칸에 있어야 보인다
+export function poiVisible(p: JourneyPoi, explored: Uint8Array | null, w: number): boolean {
+  if (p.hidden && !p.found && !p.done) return false;
+  if (explored && !explored[p.ty * w + p.tx]) return false;
+  return true;
+}
+
+export function exploredBits(j: JourneyState): Uint8Array | null {
+  if (!j.area) return null;
+  const m = getAreaMap(j.area);
+  return decodeExplored(j.explored?.[j.area], m.w * m.h);
+}
 
 function eligible(def: JourneyEventDef, s: GameState, r: JourneyRegion, usedKeys: Set<string>, leg: JourneyLeg | null = null, day = 0): boolean {
   if (!triggerMet(def.trigger, s, leg, day)) return false;
@@ -75,7 +110,7 @@ function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Jou
       if (getJourneyEventDef(key) && !used.has(key)) out.push({ kind: 'ECHO', key });
     });
 
-  const slots = 3 + (Math.random() < 0.5 ? 1 : 0);
+  const slots = 4 + (Math.random() < 0.5 ? 1 : 0);
   let guard = 0;
   while (out.length < slots + (leg.vista ? 1 : 0) && guard++ < 30) {
     const kind = weighted(
@@ -100,13 +135,13 @@ function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Jou
     used.add(pick.key);
   }
 
-  // 땅 안에 흩뿌린다 — 주막·사람은 길가에, 고수·보물·절경은 길에서 들어간 곳에.
-  const m = getJourneyMap(r.id);
-  const occupied: Array<{ tx: number; ty: number }> = [...(journey?.pois || [])];
-  if (journey) occupied.push({ tx: journey.pos.x, ty: journey.pos.y });
+  // 구역 지도 안에 흩뿌린다 — 주막·사람은 길가에, 고수·보물·사당·절경은 길에서 멀리 벗어난 막다른 곳에 숨긴다.
+  const m = getAreaMap(leg.id);
+  const occupied: Array<{ tx: number; ty: number }> = (journey?.pois || []).filter((p) => p.area === leg.id);
+  occupied.push({ tx: m.entrance.x, ty: m.entrance.y });
   const placed: JourneyPoi[] = [];
   out.forEach((o, i) => {
-    const spot = pickPoiTile(m, leg.id, o.kind, [...occupied, ...placed]);
+    const spot = pickAreaPoiTile(m, o.kind, [...occupied, ...placed]);
     if (!spot) return;
     const def = getJourneyEventDef(o.key);
     placed.push({
@@ -116,6 +151,8 @@ function buildPois(s: GameState, r: JourneyRegion, leg: JourneyLeg, journey: Jou
       tx: spot.x,
       ty: spot.y,
       legId: leg.id,
+      area: leg.id,
+      ...(HIDDEN_KINDS.has(o.kind) ? { hidden: true } : {}),
       label: def?.label ? def.label(s, r) : o.key,
     });
   });
@@ -144,6 +181,8 @@ export function startJourney(s: GameState, regionId?: JourneyRegionId): GameStat
     steps: 0,
     pois: [],
     builtLegs: [leg.id],
+    builtAreas: [],
+    area: null,
     visitedLegs: [leg.id],
     highlights: [],
     start: { money: s.money, fame: s.fame, health: s.health, stats: { ...s.stats }, year: s.year, season: s.season },
@@ -154,7 +193,6 @@ export function startJourney(s: GameState, regionId?: JourneyRegionId): GameStat
     lastSeasonSummary: null,
     flags: { ...s.flags, journeyCount: (s.flags.journeyCount || 0) + 1 },
   };
-  base.pois = buildPois(next, r, leg, base);
   next = { ...next, journey: base };
   return addLog(next, `무사수행을 떠났다 — ${r.name}(${r.hanja}). ${r.blurb}`, 'GOOD');
 }
@@ -193,6 +231,8 @@ export function normalizeJourney(s: GameState): GameState {
     steps: 0,
     pois: [],
     builtLegs: [zone.legId],
+    builtAreas: [zone.legId],
+    area: null,
     visitedLegs: Array.from(new Set([...(j.visitedLegs || []), zone.legId])),
     highlights: j.highlights || [],
     start: j.start,
@@ -216,7 +256,7 @@ export function currentLeg(s: GameState): JourneyLeg | null {
 
 // 돌발 사건(매복·맹수·폭설·검문)이 하루에 일어날 확률. 지역의 위험도, 땅의 성격, 계절에 따른다.
 function ambushRatePerDay(s: GameState, r: JourneyRegion, leg: JourneyLeg): number {
-  const base = Math.max(0, r.danger - 0.15) * 0.06;
+  const base = Math.max(0, r.danger - 0.15) * 0.05;
   const terrain = leg.terrain === 'TOWN' || leg.terrain === 'TEMPLE' ? 0.4 : 1;
   return base * terrain * (s.season === 'WINTER' ? 1.2 : 1);
 }
@@ -227,16 +267,80 @@ function enterZone(s: GameState, legId: string): GameState {
   const j = s.journey;
   if (!r || !j || j.legId === legId) return s;
   const leg = getLeg(r, legId);
-  let journey: JourneyState = {
+  void leg;
+  const journey: JourneyState = {
     ...j,
     legId,
     visitedLegs: j.visitedLegs.includes(legId) ? j.visitedLegs : [...j.visitedLegs, legId],
+    builtLegs: j.builtLegs.includes(legId) ? j.builtLegs : [...j.builtLegs, legId],
   };
-  if (!j.builtLegs.includes(legId)) {
-    const pois = buildPois(s, r, leg, journey);
-    journey = { ...journey, builtLegs: [...journey.builtLegs, legId], pois: [...journey.pois, ...pois] };
-  }
   return { ...s, journey };
+}
+
+// 둘러본 칸을 넓히고, 가까이 다가간 숨은 장소를 찾는다
+const FIND_RANGE = 2;
+function lookAround(j: JourneyState): JourneyState {
+  if (!j.area) return j;
+  const m = getAreaMap(j.area);
+  const bits = decodeExplored(j.explored?.[j.area], m.w * m.h);
+  const changed = revealAround(m, bits, j.pos.x, j.pos.y);
+  let pois = j.pois;
+  if (pois.some((p) => p.area === j.area && p.hidden && !p.found && Math.max(Math.abs(p.tx - j.pos.x), Math.abs(p.ty - j.pos.y)) <= FIND_RANGE)) {
+    pois = pois.map((p) =>
+      p.area === j.area && p.hidden && !p.found && Math.max(Math.abs(p.tx - j.pos.x), Math.abs(p.ty - j.pos.y)) <= FIND_RANGE ? { ...p, found: true } : p
+    );
+  }
+  if (!changed && pois === j.pois) return j;
+  return { ...j, pois, explored: changed ? { ...(j.explored || {}), [j.area]: encodeExplored(bits) } : j.explored };
+}
+
+// 바깥 지도의 입구를 밟아 구역 지도로 들어간다. 처음 들어서면 그 땅의 장소들이 놓인다.
+export function enterArea(s: GameState, legId: string): GameState {
+  const r = currentRegion(s);
+  const j = s.journey;
+  if (!r || !j || j.area) return s;
+  const leg = getLeg(r, legId);
+  const m = getAreaMap(legId);
+  let journey: JourneyState = {
+    ...j,
+    legId,
+    area: legId,
+    overPos: { ...j.pos },
+    pos: { ...m.entrance },
+    facing: 'U',
+    visitedLegs: j.visitedLegs.includes(legId) ? j.visitedLegs : [...j.visitedLegs, legId],
+  };
+  if (!(j.builtAreas || []).includes(legId)) {
+    const pois = buildPois(s, r, leg, journey);
+    journey = { ...journey, builtAreas: [...(j.builtAreas || []), legId], pois: [...journey.pois, ...pois] };
+  }
+  return { ...s, journey: lookAround(journey) };
+}
+
+// 구역 지도의 출구로 나가 바깥 지도의 입구에 선다
+export function leaveArea(s: GameState): GameState {
+  const j = s.journey;
+  if (!j || !j.area) return s;
+  const over = getJourneyMap(j.regionId);
+  const gate = over.gates?.find((g) => g.legId === j.area);
+  const pos = j.overPos || (gate ? { x: gate.x, y: gate.y } : { ...over.entrance });
+  return { ...s, journey: { ...j, area: null, pos, facing: 'D' } };
+}
+
+// 바깥 지도에서 지금 선 칸이 구역 지도의 입구인가
+export function gateHere(s: GameState): string | null {
+  const j = s.journey;
+  if (!j || j.area) return null;
+  const g = getJourneyMap(j.regionId).gates?.find((gt) => gt.x === j.pos.x && gt.y === j.pos.y);
+  return g ? g.legId : null;
+}
+
+// 구역 지도의 출구 칸에 서 있는가
+export function atAreaExit(s: GameState): boolean {
+  const j = s.journey;
+  if (!j || !j.area) return false;
+  const m = getAreaMap(j.area);
+  return j.pos.x === m.entrance.x && j.pos.y === m.entrance.y;
 }
 
 const FACING: Record<string, JourneyState['facing']> = { '1,0': 'R', '-1,0': 'L', '0,1': 'D', '0,-1': 'U' };
@@ -248,19 +352,28 @@ export function stepJourney(s: GameState, dx: number, dy: number): GameState {
   if (j.day >= j.maxDays - 0.01) return s;
   if (Math.abs(dx) + Math.abs(dy) !== 1) return s;
   const r = currentRegion(s)!;
-  const m = getJourneyMap(j.regionId);
+  const m = currentMap(j);
   const nx = j.pos.x + dx;
   const ny = j.pos.y + dy;
   const facing = FACING[`${dx},${dy}`] || j.facing;
+  // 구역 지도의 출구에서 아래로 걸어 나가면 바깥 지도로
+  if (j.area && dy === 1 && j.pos.x === m.entrance.x && j.pos.y === m.entrance.y) return leaveArea(s);
   const t = tileAt(m, nx, ny);
   if (!t || !TILE_INFO[t].pass) return facing === j.facing ? s : { ...s, journey: { ...j, facing } };
-  const cost = tileDays(t, s.season);
+  const cost = stepDays(j, t, s.season);
   let next: GameState = {
     ...s,
     journey: { ...j, pos: { x: nx, y: ny }, facing, day: Math.min(j.maxDays, j.day + cost), steps: (j.steps || 0) + 1 },
   };
-  const zone = zoneLegAt(m, nx, ny);
-  if (zone && zone !== j.legId) next = enterZone(next, zone);
+  if (!j.area) {
+    const zone = zoneLegAt(m, nx, ny);
+    if (zone && zone !== j.legId) next = enterZone(next, zone);
+    // 땅의 입구를 밟았다 — 그 땅의 구역 지도로
+    const gate = m.gates?.find((g) => g.x === nx && g.y === ny);
+    if (gate) return enterArea(next, gate.legId);
+  } else {
+    next = { ...next, journey: lookAround(next.journey!) };
+  }
   const js = next.journey!;
 
   // 길을 걷다 보면 새 풍문이 들린다
@@ -269,8 +382,8 @@ export function stepJourney(s: GameState, dx: number, dy: number): GameState {
     if (rumors.length) next = { ...next, journey: { ...js, lastRumor: rumors[Math.floor(Math.random() * rumors.length)] } };
   }
 
-  // 장소를 밟았다
-  const poi = js.pois.find((p) => p.tx === nx && p.ty === ny && !p.done);
+  // 장소를 밟았다 (숨은 장소도 밟으면 드러난다)
+  const poi = poisOnMap(js).find((p) => p.tx === nx && p.ty === ny && !p.done);
   if (poi) return openPoi(next, poi.id);
 
   // 돌발 사건 — 바로 앞선 돌발에서 나흘은 지나야 또 일어난다
@@ -287,13 +400,13 @@ export function stepJourney(s: GameState, dx: number, dy: number): GameState {
 export function poiHere(s: GameState): JourneyPoi | null {
   const j = s.journey;
   if (!j) return null;
-  return j.pois.find((p) => p.tx === j.pos.x && p.ty === j.pos.y && !p.done) || null;
+  return poisOnMap(j).find((p) => p.tx === j.pos.x && p.ty === j.pos.y && !p.done) || null;
 }
 
 // 도장으로 이어지는 길목에 서 있는가
 export function atEntrance(s: GameState): boolean {
   const j = s.journey;
-  if (!j) return false;
+  if (!j || j.area) return false;
   const m = getJourneyMap(j.regionId);
   return j.pos.x === m.entrance.x && j.pos.y === m.entrance.y;
 }
@@ -602,11 +715,16 @@ export interface HeadlessJourneyHooks {
   onStep?: (s: GameState) => void;
 }
 
-// 봇은 가장 가까운 아직 안 들른 장소로 걷고, 들를 곳이 없으면 아직 안 밟은 땅으로 간다.
+// 봇은 사람처럼 걷는다 — 숨은 장소를 미리 알지 못한다.
+//  구역 지도: 보이는 장소로 가고, 없으면 아직 둘러보지 않은 칸 쪽으로. 땅의 대부분을 보았거나 오래 머물렀으면 출구로 나간다.
+//  바깥 지도: 아직 들어가 보지 않은 땅의 입구로. 갈 곳이 없으면 수행을 마친다.
+const BOT_AREA_SEEN = 0.72; // 이만큼 둘러보면 나간다
+const BOT_AREA_DAYS = 24; // 한 땅에 이보다 오래 머물지 않는다
 export function runJourneyHeadless(s0: GameState, regionId: JourneyRegionId | undefined, hooks: HeadlessJourneyHooks): GameState {
   let s = startJourney(s0, regionId);
-  const m = getJourneyMap(s.journey!.regionId);
   const tried = new Set<string>(); // 한 번 살펴본 장소 (그냥 지나쳤어도 다시 가지 않는다)
+  const done = new Set<string>(); // 다 둘러보고 나온 땅
+  let areaSince = 0;
   const handleEvent = () => {
     let inner = 0;
     while (s.activeEvent && inner++ < 4) {
@@ -621,22 +739,51 @@ export function runJourneyHeadless(s0: GameState, regionId: JourneyRegionId | un
     }
   };
   let guard = 0;
-  while (s.journey && s.phase === 'MAIN' && !journeyOver(s) && guard++ < 60) {
+  while (s.journey && s.phase === 'MAIN' && !journeyOver(s) && guard++ < 400) {
     const j = s.journey;
-    const open = j.pois.filter((p) => !p.done && !tried.has(p.id));
-    let path = open.length ? findPath(m, j.pos, (x, y) => open.some((p) => p.tx === x && p.ty === y)) : null;
-    if (!path) path = findPath(m, j.pos, (x, y) => !j.visitedLegs.includes(zoneLegAt(m, x, y) || ''));
-    if (!path) break;
-    for (const step of path) {
+    const m = currentMap(j);
+    let path: Array<{ x: number; y: number }> | null = null;
+    let leaving = false;
+    if (j.area) {
+      const bits = exploredBits(j)!;
+      let seen = 0;
+      let reachable = 0;
+      for (let i = 0; i < m.w * m.h; i++) if (m.reach[i]) { reachable++; if (bits[i]) seen++; }
+      const open = poisOnMap(j).filter((p) => !p.done && !tried.has(p.id) && poiVisible(p, bits, m.w));
+      if (open.length) path = findPath(m, j.pos, (x, y) => open.some((p) => p.tx === x && p.ty === y));
+      const stay = seen / Math.max(1, reachable) < BOT_AREA_SEEN && j.day - areaSince < BOT_AREA_DAYS;
+      if (!path && stay) path = findPath(m, j.pos, (x, y) => !bits[y * m.w + x]);
+      if (!path) {
+        leaving = true;
+        done.add(j.area);
+        path = j.pos.x === m.entrance.x && j.pos.y === m.entrance.y ? [] : findPath(m, j.pos, (x, y) => x === m.entrance.x && y === m.entrance.y);
+        if (!path) break;
+      }
+    } else {
+      const gates = (m.gates || []).filter((g) => !done.has(g.legId));
+      path = gates.length ? findPath(m, j.pos, (x, y) => gates.some((g) => g.x === x && g.y === y)) : null;
+      if (!path) break;
+    }
+    // 구역 지도에서는 몇 걸음마다 목표를 다시 고른다 (걷는 사이에 새 장소가 드러난다)
+    const chunk = j.area && !leaving ? path.slice(0, 6) : path;
+    for (const step of chunk) {
       if (!s.journey || s.phase !== 'MAIN' || journeyOver(s)) break;
+      const before = s.journey.area;
       const cur = s.journey.pos;
       s = stepJourney(s, step.x - cur.x, step.y - cur.y);
       hooks.onStep?.(s);
       if (s.activeEvent) {
         handleEvent();
-        // 사건이 끝나면 목표를 다시 고른다
         break;
       }
+      if (s.journey && s.journey.area !== before) {
+        if (s.journey.area) areaSince = s.journey.day;
+        break;
+      }
+    }
+    if (leaving && s.journey?.area && !s.activeEvent) {
+      s = stepJourney(s, 0, 1); // 출구에서 아래로 걸어 나간다
+      hooks.onStep?.(s);
     }
   }
   if (s.journey) hooks.onStep?.(s);

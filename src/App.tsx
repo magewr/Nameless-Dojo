@@ -47,7 +47,7 @@ import { DojoSimView } from './components/DojoSimView';
 import { JourneyView } from './components/JourneyView';
 import { TournamentView } from './components/TournamentView';
 import { closeTourney, nextQualifier, simulatePendingMatches, startHeroMatch, watchMatch } from './engine/tourney';
-import { finishJourney, normalizeJourney, openPoi, startJourney, stepJourney } from './engine/journey';
+import { enterArea, finishJourney, leaveArea, normalizeJourney, openPoi, startJourney, stepJourney } from './engine/journey';
 import { AutoBattleView } from './components/AutoBattleView';
 import { TrainingAndCraftingModal } from './components/TrainingAndCraftingModal';
 import { DojoAndWeaponsModal } from './components/DojoAndWeaponsModal';
@@ -516,6 +516,8 @@ export function App() {
           onSceneReady={() => setSceneReady(true)}
           onStep={(dx, dy) => setState((prev) => (prev && prev.journey ? stepJourney(prev, dx, dy) : prev))}
           onInteract={(poiId) => setState((prev) => (prev && prev.journey && !prev.activeEvent ? openPoi(prev, poiId) : prev))}
+          onEnterArea={(legId) => setState((prev) => (prev && prev.journey && !prev.activeEvent ? enterArea(prev, legId) : prev))}
+          onLeaveArea={() => setState((prev) => (prev && prev.journey && !prev.activeEvent ? leaveArea(prev) : prev))}
           onFinish={() => setState((prev) => (prev && prev.journey ? finishJourney(prev) : prev))}
         />
       ) : (

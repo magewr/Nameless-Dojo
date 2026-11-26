@@ -63,6 +63,9 @@ export interface JourneyPoi {
   tx: number; // 지도 위의 칸
   ty: number;
   legId: string; // 놓인 땅(구역)
+  area?: string; // 놓인 구역 지도 (구간 id). 비어 있으면 바깥 지도(지역 전도) 위에 놓인 장소
+  hidden?: boolean; // 가까이 가야 드러나는 장소 (고수·보물·사당·절경)
+  found?: boolean; // 숨은 장소를 찾았다
   label: string;
   done?: boolean;
   data?: Record<string, string | number>;
@@ -73,7 +76,11 @@ export interface JourneyState {
   day: number; // 쓴 날수
   maxDays: number; // 한 계절 = 90일
   legId: string; // 지금 서 있는 땅(구역) — 지역 구간표의 구간 하나가 지도 위의 땅 하나다
-  pos: { x: number; y: number }; // 지도 위의 칸
+  pos: { x: number; y: number }; // 지금 서 있는 지도(바깥 지도 또는 구역 지도) 위의 칸
+  area?: string | null; // 들어와 있는 구역 지도 (구간 id). 비어 있으면 바깥 지도 위
+  overPos?: { x: number; y: number }; // 구역 지도에서 나가면 설 바깥 지도의 칸 (들어온 입구)
+  builtAreas?: string[]; // 장소가 이미 놓인 구역 지도
+  explored?: Record<string, string>; // 구역 지도마다 둘러본 칸 (1비트씩, base64)
   facing?: 'L' | 'R' | 'U' | 'D';
   steps?: number; // 걸은 걸음 수
   pois: JourneyPoi[];

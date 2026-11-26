@@ -114,6 +114,7 @@ const G = { GRASS: 0, FOREST: 1, DIRT: 2, WATER: 3, SEA: 4, SAND: 5, SOIL: 6, PL
 function groundOf(k: TileKind | null): number {
   switch (k) {
     case 'FOREST':
+    case 'GROVE':
       return G.FOREST;
     case 'ROAD':
       return G.DIRT;
@@ -720,8 +721,14 @@ export function paintFieldObjects(m: JourneyMap, country: CountryId, season: Sea
       const r = tileHash(x, y, m.seed + 201);
       const seed = x * 131 + y * 17 + m.seed;
       const jx = Math.round((tileHash(x, y, m.seed + 203) - 0.5) * 4);
-      if (k === 'FOREST') {
+      if (k === 'FOREST' || k === 'GROVE') {
         const c = get();
+        // 우거진 숲은 나무 한 그루를 더 겹쳐 빽빽하게
+        if (k === 'GROVE') {
+          const gx = ox + 3 + Math.round(tileHash(x, y, m.seed + 207) * 10);
+          if (P.snow) drawPine(c, gx, oy + 9, P.pine, 18 + Math.floor(r * 8));
+          else drawOak(c, gx, oy + 9, P.oak[Math.floor(tileHash(x, y, m.seed + 208) * P.oak.length)], seed + 7);
+        }
         const pine = r < (season === 'WINTER' ? 0.6 : 0.4);
         const bx = ox + 8 + jx;
         if (pine) {
@@ -1125,23 +1132,57 @@ export function paintedMapSources(regionId: string, season: Season): { seasonal:
 // 그림 지도의 안개 — 아직 발을 들이지 않은 땅은 빛이 바래고 어둑하게 가라앉는다.
 // 그림과 같은 크기로 만들고, 경계는 한 칸에 걸쳐 부드럽게 풀린다.
 export function paintPaintedVeil(img: HTMLImageElement, m: JourneyMap, visited: Set<string>, season: Season): HTMLCanvasElement {
-  const IW = img.naturalWidth;
-  const IH = img.naturalHeight;
+  return paintKnownVeil(img, img.naturalWidth, img.naturalHeight, m, (x, y) => visited.has(m.zones[m.zone[y * m.w + x]].legId), season, Infinity);
+}
+
+// 빛을 뺀 바탕 — 같은 그림·계절이면 한 번만 만든다
+const dimCache = new WeakMap<object, Map<string, HTMLCanvasElement>>();
+function dimmedOf(src: CanvasImageSource, IW: number, IH: number, season: Season, scale: number): HTMLCanvasElement {
+  const key = `${season}:${scale}`;
+  let per = dimCache.get(src as object);
+  if (!per) {
+    per = new Map();
+    dimCache.set(src as object, per);
+  }
+  const hit = per.get(key);
+  if (hit) return hit;
   const out = document.createElement('canvas');
-  out.width = IW;
-  out.height = IH;
+  out.width = Math.max(1, Math.round(IW * scale));
+  out.height = Math.max(1, Math.round(IH * scale));
   const o = out.getContext('2d')!;
-  o.drawImage(img, 0, 0);
+  o.imageSmoothingEnabled = true;
+  o.drawImage(src, 0, 0, out.width, out.height);
   // 색을 빼고, 푸르스름하게 가라앉히고, 엷은 운무를 한 겹
   o.globalCompositeOperation = 'saturation';
   o.fillStyle = 'rgba(128,128,128,0.8)';
-  o.fillRect(0, 0, IW, IH);
+  o.fillRect(0, 0, out.width, out.height);
   o.globalCompositeOperation = 'multiply';
   o.fillStyle = season === 'WINTER' ? '#6f7890' : '#77748f';
-  o.fillRect(0, 0, IW, IH);
+  o.fillRect(0, 0, out.width, out.height);
   o.globalCompositeOperation = 'source-over';
   o.fillStyle = season === 'WINTER' ? 'rgba(226,232,244,0.12)' : 'rgba(206,202,226,0.2)';
-  o.fillRect(0, 0, IW, IH);
+  o.fillRect(0, 0, out.width, out.height);
+  per.set(key, out);
+  return out;
+}
+
+// 아는 칸만 밝게 두는 안개. 구역 지도는 걸음마다 다시 그리니 가로 maxW 화소 안쪽으로 줄여 그린다.
+export function paintKnownVeil(
+  src: CanvasImageSource,
+  IW: number,
+  IH: number,
+  m: JourneyMap,
+  known: (x: number, y: number) => boolean,
+  season: Season,
+  maxW = 1024
+): HTMLCanvasElement {
+  const scale = Math.min(1, maxW / IW);
+  const base = dimmedOf(src, IW, IH, season, scale);
+  const out = document.createElement('canvas');
+  out.width = base.width;
+  out.height = base.height;
+  const o = out.getContext('2d')!;
+  o.drawImage(base, 0, 0);
   // 가리개 — 칸 하나가 화소 하나인 작은 판을 부드럽게 키운다
   const mk = document.createElement('canvas');
   mk.width = m.w;
@@ -1149,10 +1190,7 @@ export function paintPaintedVeil(img: HTMLImageElement, m: JourneyMap, visited: 
   const mctx = mk.getContext('2d')!;
   const md = mctx.createImageData(m.w, m.h);
   for (let y = 0; y < m.h; y++) {
-    for (let x = 0; x < m.w; x++) {
-      const known = visited.has(m.zones[m.zone[y * m.w + x]].legId);
-      md.data[(y * m.w + x) * 4 + 3] = known ? 0 : 255;
-    }
+    for (let x = 0; x < m.w; x++) md.data[(y * m.w + x) * 4 + 3] = known(x, y) ? 0 : 255;
   }
   mctx.putImageData(md, 0, 0);
   // 두 번에 나눠 키우면 경계가 계단 없이 풀린다
@@ -1165,7 +1203,56 @@ export function paintPaintedVeil(img: HTMLImageElement, m: JourneyMap, visited: 
   o.globalCompositeOperation = 'destination-in';
   o.imageSmoothingEnabled = true;
   o.imageSmoothingQuality = 'high';
-  o.drawImage(mid, 0, 0, IW, IH);
+  o.drawImage(mid, 0, 0, out.width, out.height);
   o.globalCompositeOperation = 'source-over';
   return out;
+}
+
+// 코드로 그린 구역 지도를 한 장으로 — 땅 위에 나무·바위·집을 얹어 둔다 (안개의 바탕)
+export function flattenField(terrain: HTMLCanvasElement, rows: Array<{ canvas: HTMLCanvasElement | null; y: number } | undefined>): HTMLCanvasElement {
+  const out = document.createElement('canvas');
+  out.width = terrain.width;
+  out.height = terrain.height;
+  const o = out.getContext('2d')!;
+  o.drawImage(terrain, 0, 0);
+  rows.forEach((r) => r?.canvas && o.drawImage(r.canvas, 0, r.y));
+  return out;
+}
+
+// 바깥 지도에서 구역 지도로 들어가는 입구 — 장대에 매단 깃발. 아직 안 들어가 본 곳은 붉은 깃발이 나부낀다.
+export function drawGateMarker(ctx: CanvasRenderingContext2D, cx: number, by: number, p: number, visited: boolean, now: number) {
+  const ox = Math.round(cx - 8 * p);
+  const oy = Math.round(by - 22 * p);
+  const R = (x: number, y: number, w: number, h: number, c: string) => pxRect(ctx, ox, oy, x, y, w, h, c, p);
+  R(4, 21, 8, 2, 'rgba(20,20,10,0.3)');
+  R(7, 2, 2, 20, LINE);
+  R(7, 3, 1, 18, '#7e5232');
+  R(6, 1, 4, 2, '#e8c070');
+  const wave = Math.floor(now / 180) % 2;
+  const cloth = visited ? '#8a8478' : '#c8322a';
+  const light = visited ? '#a8a294' : '#ee5a3e';
+  R(9, 3, 6, 5, LINE);
+  R(9, 4, 5 + wave, 3, cloth);
+  R(9, 4, 5 + wave, 1, light);
+  if (!visited) {
+    // 아래로 까딱이는 화살 — 「여기로 들어간다」
+    const bob = Math.floor(now / 260) % 2;
+    R(5, -6 + bob, 6, 1, LINE);
+    R(6, -5 + bob, 4, 1, '#fde047');
+    R(7, -4 + bob, 2, 1, '#fde047');
+  }
+}
+
+// 구역 지도의 출구 — 아래로 깜박이는 화살
+export function drawExitMarker(ctx: CanvasRenderingContext2D, cx: number, by: number, p: number, now: number) {
+  const on = Math.floor(now / 400) % 2 === 0;
+  const ox = Math.round(cx - 4 * p);
+  const oy = Math.round(by - 6 * p + (on ? 1 : 0) * p);
+  const R = (x: number, y: number, w: number, h: number, c: string) => pxRect(ctx, ox, oy, x, y, w, h, c, p);
+  R(0, 0, 8, 2, LINE);
+  R(1, 0, 6, 1, '#fde68a');
+  R(1, 2, 6, 2, LINE);
+  R(2, 2, 4, 1, '#fde68a');
+  R(2, 4, 4, 2, LINE);
+  R(3, 4, 2, 1, '#fde68a');
 }

@@ -14,6 +14,7 @@ export type TileKind =
   | 'BRIDGE'
   | 'FIELD'
   | 'FOREST'
+  | 'GROVE'
   | 'HILL'
   | 'SAND'
   | 'REED'
@@ -31,6 +32,7 @@ export const TILE_INFO: Record<TileKind, { pass: boolean; days: number; name: st
   BRIDGE: { pass: true, days: 0.6, name: '다리' },
   FIELD: { pass: true, days: 0.85, name: '논밭' },
   FOREST: { pass: true, days: 1.2, name: '숲' },
+  GROVE: { pass: false, days: 0, name: '우거진 숲' },
   HILL: { pass: true, days: 1.5, name: '산비탈' },
   SAND: { pass: true, days: 0.95, name: '모래톱' },
   REED: { pass: true, days: 1.1, name: '갈대밭' },
@@ -67,11 +69,14 @@ export interface JourneyMap {
   entrance: { x: number; y: number }; // 도장으로 이어지는 길목 (출발점)
   reach: Uint8Array; // 출발점에서 걸어서 닿는 칸
   roadDist: Uint8Array; // 가장 가까운 길까지 몇 걸음
+  walkDist: Uint16Array; // 출발점에서 몇 걸음 (닿지 않으면 65535)
   seed: number;
+  area?: string; // 구역 지도면 그 구간 id (바깥 지도는 비어 있다)
+  gates?: Array<{ legId: string; x: number; y: number }>; // 바깥 지도에서 구역 지도로 들어가는 자리
 }
 
 // ───────── 결정론적 난수 ─────────
-function hashStr(str: string): number {
+export function hashStr(str: string): number {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);
@@ -80,7 +85,7 @@ function hashStr(str: string): number {
   return h >>> 0;
 }
 
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -125,6 +130,7 @@ export const TILE_CHAR: Record<TileKind, string> = {
   BRIDGE: '#',
   FIELD: 'f',
   FOREST: 'T',
+  GROVE: 'F',
   HILL: 'h',
   SAND: 's',
   REED: 'r',
@@ -135,9 +141,9 @@ export const TILE_CHAR: Record<TileKind, string> = {
   HOUSE: 'H',
   HALL: 'A',
 };
-const CHAR_TILE: Record<string, TileKind> = Object.fromEntries(Object.entries(TILE_CHAR).map(([k, c]) => [c, k as TileKind]));
+export const CHAR_TILE: Record<string, TileKind> = Object.fromEntries(Object.entries(TILE_CHAR).map(([k, c]) => [c, k as TileKind]));
 
-function parseLayout(rows: string[], W: number, H: number): TileKind[] | null {
+export function parseLayout(rows: string[], W: number, H: number): TileKind[] | null {
   if (rows.length !== H || rows.some((r) => r.length !== W)) return null;
   const out: TileKind[] = [];
   for (const r of rows) for (const c of r) out.push(CHAR_TILE[c] || 'PLAIN');
@@ -387,13 +393,42 @@ function buildMap(region: JourneyRegion): JourneyMap {
     else console.warn(`[journeyMap] ${region.id} 칸 배치의 크기가 ${W}×${H}와 맞지 않아 무시한다`);
   }
 
-  // 7) 출발점에서 걸어서 닿는 칸, 그리고 길까지의 거리
+  // 7) 출발점에서 걸어서 닿는 칸, 길까지의 거리 — 그리고 땅마다 구역 지도로 들어가는 자리
+  const m = finishMap({ regionId: region.id, w: W, h: H, tiles, zone, zones, entrance, seed });
+  m.gates = zones.map((z, zi) => {
+    let best: { x: number; y: number } | null = null;
+    let bestScore = Infinity;
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = at(x, y);
+        if (zone[i] !== zi || !m.reach[i]) continue;
+        const nearGate = Math.abs(x - entrance.x) + Math.abs(y - entrance.y);
+        const road = tiles[i] === 'ROAD' || tiles[i] === 'BRIDGE';
+        const sc = Math.hypot(x - z.cx, y - z.cy) + (road ? 0 : 3) + (nearGate < 5 ? 20 : 0) + (tiles[i] === 'BRIDGE' ? 2 : 0);
+        if (sc < bestScore) {
+          bestScore = sc;
+          best = { x, y };
+        }
+      }
+    }
+    return { legId: z.legId, ...(best || { x: z.cx, y: z.cy }) };
+  });
+  return m;
+}
+
+// 칸 배치가 정해진 지도에 「걸어서 닿는 칸 · 길까지의 거리 · 출발점에서의 걸음 수」를 붙인다 (바깥 지도·구역 지도 함께)
+export function finishMap(base: Omit<JourneyMap, 'reach' | 'roadDist' | 'walkDist'>): JourneyMap {
+  const { w: W, h: H, tiles, entrance } = base;
+  const at = (x: number, y: number) => y * W + x;
   const pass = (i: number) => TILE_INFO[tiles[i]].pass;
   const reach = new Uint8Array(W * H);
+  const walkDist = new Uint16Array(W * H).fill(65535);
   const q: number[] = [at(entrance.x, entrance.y)];
   reach[q[0]] = 1;
-  while (q.length) {
-    const u = q.shift()!;
+  walkDist[q[0]] = 0;
+  let head = 0;
+  while (head < q.length) {
+    const u = q[head++];
     const ux = u % W;
     const uy = Math.floor(u / W);
     for (const [nx, ny] of [[ux + 1, uy], [ux - 1, uy], [ux, uy + 1], [ux, uy - 1]] as Array<[number, number]>) {
@@ -401,14 +436,16 @@ function buildMap(region: JourneyRegion): JourneyMap {
       const v = at(nx, ny);
       if (reach[v] || !pass(v)) continue;
       reach[v] = 1;
+      walkDist[v] = walkDist[u] + 1;
       q.push(v);
     }
   }
   const roadDist = new Uint8Array(W * H).fill(255);
   const rq: number[] = [];
   for (let i = 0; i < W * H; i++) if (tiles[i] === 'ROAD' || tiles[i] === 'BRIDGE') { roadDist[i] = 0; rq.push(i); }
-  while (rq.length) {
-    const u = rq.shift()!;
+  head = 0;
+  while (head < rq.length) {
+    const u = rq[head++];
     const ux = u % W;
     const uy = Math.floor(u / W);
     for (const [nx, ny] of [[ux + 1, uy], [ux - 1, uy], [ux, uy + 1], [ux, uy - 1]] as Array<[number, number]>) {
@@ -419,8 +456,7 @@ function buildMap(region: JourneyRegion): JourneyMap {
       rq.push(v);
     }
   }
-
-  return { regionId: region.id, w: W, h: H, tiles, zone, zones, entrance, reach, roadDist, seed };
+  return { ...base, reach, roadDist, walkDist };
 }
 
 const cache = new Map<string, JourneyMap>();

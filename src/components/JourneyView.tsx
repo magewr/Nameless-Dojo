@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GameState, JourneyPoi } from '../types/game';
 import { getLeg, getRegion } from '../data/journeyRegions';
-import { findPath, getJourneyMap, JourneyMap, TILE_INFO, tileAt, tileDays, walkable, zoneLegAt } from '../data/journeyMap';
-import { atEntrance, poiHere } from '../engine/journey';
+import { findPath, JourneyMap, TILE_INFO, tileAt, walkable, zoneLegAt } from '../data/journeyMap';
+import { paintedAreaSources } from '../data/journeyAreas';
+import { atAreaExit, atEntrance, currentMap, exploredBits, gateHere, poiHere, poisOnMap, poiVisible, stepDays } from '../engine/journey';
 import { COUNTRIES, SEASON_META } from '../data/worldAndEndings';
 import {
   CLOUD_TILE,
   drawEntranceSprite,
+  drawExitMarker,
   drawFieldHero,
+  drawGateMarker,
   drawPoiAlert,
   drawPoiSprite,
   fieldSmokeSources,
@@ -16,13 +19,15 @@ import {
   paintFieldGround,
   paintFieldObjects,
   paintedMapSources,
+  paintKnownVeil,
   paintPaintedVeil,
+  flattenField,
   TILE_PX,
 } from '../pixel/journeyMapPainter';
 import { loadRawImage } from '../pixel/spriteLoader';
 import { PixelPortrait } from './PixelPortrait';
 import { sound } from '../engine/sound';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Coins, Footprints, Heart, Home, Map as MapIcon, MapPin, Search, Star } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Coins, Footprints, Heart, Home, LogIn, LogOut, Map as MapIcon, MapPin, Search, Star } from 'lucide-react';
 
 // 무사수행 필드 — 스타듀 밸리 같은 16×16 도트 필드 위를 위·아래·왼쪽·오른쪽으로 한 칸씩 걷는다.
 // 지도 위에는 글자를 쓰지 않는다. 장소는 그림과 머리 위 「!」로 알아보고, 이름은 아래 창에 뜬다.
@@ -34,6 +39,8 @@ interface Props {
   onSceneReady: () => void;
   onStep: (dx: number, dy: number) => void;
   onInteract: (poiId: string) => void;
+  onEnterArea: (legId: string) => void;
+  onLeaveArea: () => void;
   onFinish: () => void;
 }
 
@@ -73,10 +80,12 @@ const GRADE: Record<string, { tint: string; glow: string; shadow: number; clouds
 };
 const COUNTRY_TAG: Record<string, string> = { KOREA: 'kr', CHINA: 'cn', JAPAN: 'jp' };
 
-export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, onStep, onInteract, onFinish }) => {
+export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, onStep, onInteract, onEnterArea, onLeaveArea, onFinish }) => {
   const j = state.journey!;
   const region = getRegion(j.regionId);
-  const map: JourneyMap = useMemo(() => getJourneyMap(j.regionId), [j.regionId]);
+  const areaId = j.area || null;
+  // 바깥 지도(지역 전도) 또는 들어와 있는 구역 지도
+  const map: JourneyMap = useMemo(() => currentMap({ regionId: j.regionId, area: areaId }), [j.regionId, areaId]);
   const leg = getLeg(region, j.legId);
   const cMeta = COUNTRIES[state.country];
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -102,6 +111,42 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
   const camRef = useRef({ x: 0, y: 0, z: 3 });
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
+  const exploredRef = useRef<Uint8Array | null>(null);
+  const fadeRef = useRef(0); // 지도를 옮겨 갈 때 잠깐 어두워진다
+  const sparksRef = useRef<Array<{ x: number; y: number; t0: number }>>([]); // 숨은 곳을 찾은 자리의 반짝임
+  const [areaBanner, setAreaBanner] = useState<string | null>(null);
+  const [foundNote, setFoundNote] = useState<string | null>(null);
+
+  // 지도를 옮겨 가면 — 보이는 위치를 곧장 옮기고, 화면을 한 번 어둡게 했다가 밝히고, 구역 이름을 띄운다
+  const lastAreaRef = useRef(areaId);
+  useEffect(() => {
+    if (lastAreaRef.current === areaId) return;
+    lastAreaRef.current = areaId;
+    visRef.current = { x: j.pos.x, y: j.pos.y };
+    pathRef.current = [];
+    fadeRef.current = 1;
+    if (areaId) {
+      setAreaBanner(areaId);
+      const t = setTimeout(() => setAreaBanner(null), 2800);
+      return () => clearTimeout(t);
+    }
+    setAreaBanner(null);
+  }, [areaId]);
+
+  // 숨은 장소를 찾았다
+  const foundKey = j.pois.filter((p) => p.found).map((p) => p.id).join('|');
+  const lastFoundRef = useRef(new Set(j.pois.filter((p) => p.found).map((p) => p.id)));
+  useEffect(() => {
+    const fresh = j.pois.filter((p) => p.found && !lastFoundRef.current.has(p.id));
+    lastFoundRef.current = new Set(j.pois.filter((p) => p.found).map((p) => p.id));
+    if (!fresh.length) return;
+    const now = performance.now();
+    fresh.forEach((p) => sparksRef.current.push({ x: p.tx, y: p.ty, t0: now }));
+    sound.playClick();
+    setFoundNote(fresh[0].label);
+    const t = setTimeout(() => setFoundNote(null), 2600);
+    return () => clearTimeout(t);
+  }, [foundKey]);
 
   const outOfDays = j.day >= j.maxDays - 0.01;
   const blocked = hasOverlay || outOfDays || confirmHome;
@@ -139,15 +184,19 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
   const objectRows = fieldObjects.rows;
   const clouds = useMemo(() => paintCloudShadows(map.seed), [map]);
   const smoke = useMemo(() => fieldSmokeSources(map), [map]);
-  // 안개 — 아직 발을 들이지 않은 땅
+  // 안개 — 바깥 지도는 아직 발을 들이지 않은 땅, 구역 지도는 아직 둘러보지 않은 칸
   const visitedKey = j.visitedLegs.join('|');
   const fog = useMemo(() => paintFieldFog(map, new Set(j.visitedLegs), state.season), [map, visitedKey, state.season]);
+  const exploredKey = areaId ? j.explored?.[areaId] || '' : '';
+  const explored = useMemo(() => exploredBits({ ...j, area: areaId }), [areaId, exploredKey]);
+  exploredRef.current = explored;
+  const flatField = useMemo(() => (areaId ? flattenField(terrain, fieldObjects.rows) : null), [areaId, terrain, fieldObjects]);
   // 지역 지도를 통째로 그린 그림 — 계절 그림이 없으면 기본 그림, 그것도 없으면 코드로 그린 땅
   const [painted, setPainted] = useState<{ img: HTMLImageElement; seasonal: boolean } | null>(null);
   useEffect(() => {
     let alive = true;
     setPainted(null);
-    const src = paintedMapSources(j.regionId, state.season);
+    const src = areaId ? paintedAreaSources(areaId, state.season) : paintedMapSources(j.regionId, state.season);
     const tryLoad = (list: Array<[string, boolean]>) => {
       if (!list.length) return;
       const img = new Image();
@@ -166,11 +215,16 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
     return () => {
       alive = false;
     };
-  }, [j.regionId, state.season]);
-  const veil = useMemo(
-    () => (painted ? paintPaintedVeil(painted.img, map, new Set(j.visitedLegs), state.season) : null),
-    [painted, map, visitedKey, state.season]
-  );
+  }, [j.regionId, areaId, state.season]);
+  const veil = useMemo(() => {
+    if (explored) {
+      const known = (x: number, y: number) => !!explored[y * map.w + x];
+      if (painted) return paintKnownVeil(painted.img, painted.img.naturalWidth, painted.img.naturalHeight, map, known, state.season);
+      if (flatField) return paintKnownVeil(flatField, flatField.width, flatField.height, map, known, state.season);
+      return null;
+    }
+    return painted ? paintPaintedVeil(painted.img, map, new Set(j.visitedLegs), state.season) : null;
+  }, [painted, map, visitedKey, explored, flatField, state.season]);
   // 지도 바깥에 깔리는 그림 (없으면 어두운 바탕)
   const backdropSrc = `/assets/px_jr_field_backdrop_${COUNTRY_TAG[region.country] || 'kr'}.jpg`;
   // 무사수행 첫날에는 지역 표제를 잠깐 띄운다
@@ -187,9 +241,16 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
     const st = stateRef.current;
     if (blockedRef.current) return;
     const p = poiHere(st);
+    const gate = gateHere(st);
     if (p) {
       sound.playClick();
       onInteract(p.id);
+    } else if (gate) {
+      sound.playClick();
+      onEnterArea(gate);
+    } else if (atAreaExit(st)) {
+      sound.playClick();
+      onLeaveArea();
     } else if (atEntrance(st)) {
       setConfirmHome(true);
     }
@@ -248,7 +309,8 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
     const ty = Math.floor(((e.clientY - rect.top) / cam.z + cam.y) / T);
     const st = stateRef.current.journey;
     if (!st || tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return null;
-    const hit = st.pois.find((p) => p.tx === tx && p.ty === ty) || st.pois.find((p) => p.tx === tx && p.ty === ty + 1);
+    const shown = poisOnMap(st).filter((p) => poiVisible(p, exploredRef.current, map.w));
+    const hit = shown.find((p) => p.tx === tx && p.ty === ty) || shown.find((p) => p.tx === tx && p.ty === ty + 1);
     return hit ? { x: hit.tx, y: hit.ty } : { x: tx, y: ty };
   };
 
@@ -289,12 +351,19 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
     const worldH = map.h * T;
     // 도트 하나 = 화면 픽셀 정수 배. 휴대폰 2배, 보통 화면 3배, 큰 화면 4배.
     let baseZoom = Math.max(2, Math.min(4, Math.round(Math.min(W / (18 * T), H / (11 * T)))));
+    // 구역 지도는 가로 스무남은 칸이 보이게 바짝 다가선다 — 화면 너머는 걸어가 봐야 안다
+    const areaZoom = Math.max(2, Math.min(W / (20 * T), H / (12 * T)));
+    if (areaId) baseZoom = Math.max(2, Math.round(areaZoom));
     if (painted) {
-      // 그림 지도는 그림의 화소 하나가 화면 화소 정수 배가 되게 (큰 화면에서는 두 배)
+      // 그림 지도는 그림의 화소 하나가 화면 화소 정수 배가 되게
       const img = painted.img;
       const s = img.naturalWidth / worldW;
-      const f = W >= img.naturalWidth * 1.9 && H >= img.naturalHeight * 1.9 ? 2 : 1;
-      baseZoom = (Math.max(1, Math.round(view.dpr * f)) / view.dpr) * s;
+      if (areaId) {
+        baseZoom = (Math.max(1, Math.round((areaZoom * view.dpr) / s)) / view.dpr) * s;
+      } else {
+        const f = W >= img.naturalWidth * 1.9 && H >= img.naturalHeight * 1.9 ? 2 : 1;
+        baseZoom = (Math.max(1, Math.round(view.dpr * f)) / view.dpr) * s;
+      }
     }
     const fitZoom = Math.min(W / worldW, H / worldH);
     // 그림이 들어오거나 빠져 배율 기준이 바뀌면 그 배율로 곧장 옮긴다
@@ -434,7 +503,10 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
       // ── 서 있는 것 · 장소 · 주인공을 줄 순서대로 — 아래 줄의 나무가 주인공의 머리를 가린다 ──
       const heroRow = Math.floor(vis.y + 0.001);
       const poisByRow = new Map<number, JourneyPoi[]>();
-      js.pois.forEach((p) => poisByRow.set(p.ty, [...(poisByRow.get(p.ty) || []), p]));
+      const shownPois = poisOnMap(js).filter((p) => poiVisible(p, exploredRef.current, map.w));
+      shownPois.forEach((p) => poisByRow.set(p.ty, [...(poisByRow.get(p.ty) || []), p]));
+      const gatesByRow = new Map<number, Array<{ legId: string; x: number; y: number }>>();
+      if (!js.area) (map.gates || []).forEach((g) => gatesByRow.set(g.y, [...(gatesByRow.get(g.y) || []), g]));
       const frame = moving || heldRef.current.length ? Math.floor(walkTickRef.current) % 4 : 0;
       const drawHero = (alpha: number) => {
         ctx.save();
@@ -453,7 +525,11 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
       for (let r = rowFrom; r <= rowTo; r++) {
         const row = objectRows[r];
         if (row?.canvas && !painted) ctx.drawImage(row.canvas, 0, row.y);
-        if (r === map.entrance.y) drawEntranceSprite(ctx, map.entrance.x * T + T / 2, map.entrance.y * T + T, 1);
+        if (r === map.entrance.y) {
+          if (js.area) drawExitMarker(ctx, map.entrance.x * T + T / 2, map.entrance.y * T + T, 1, now);
+          else drawEntranceSprite(ctx, map.entrance.x * T + T / 2, map.entrance.y * T + T, 1);
+        }
+        (gatesByRow.get(r) || []).forEach((g) => drawGateMarker(ctx, g.x * T + T / 2, g.y * T + T, 1, (js.builtAreas || []).includes(g.legId), now));
         (poisByRow.get(r) || []).forEach((p) => drawPoiSprite(ctx, p.kind, p.tx * T + T / 2, p.ty * T + T, 1, st.country, !!p.done, now));
         if (r === heroRow) drawHero(1);
       }
@@ -561,21 +637,43 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
         }
       });
 
-      if (painted && veil) {
+      if (veil) {
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(veil, 0, 0, worldW, worldH);
         ctx.imageSmoothingEnabled = false;
-      } else {
+      } else if (!js.area) {
         ctx.globalAlpha = 0.92;
         ctx.drawImage(fog, 0, 0);
         ctx.globalAlpha = 1;
       }
 
       // 아직 들르지 않은 장소의 「!」
-      js.pois.forEach((p) => {
+      shownPois.forEach((p) => {
         if (p.done || (p.tx === js.pos.x && p.ty === js.pos.y)) return;
         drawPoiAlert(ctx, p.tx * T + T / 2, p.ty * T + (p.kind === 'VISTA' ? -14 : p.kind === 'INN' || p.kind === 'HISTORY' ? -6 : 0), 1, now + p.tx * 97);
       });
+      // 숨은 곳을 찾은 자리 — 퍼져 나가는 빛 고리와 튀는 별빛
+      const sparks = sparksRef.current;
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const sp = sparks[i];
+        const age = (now - sp.t0) / 1000;
+        if (age > 1.4) {
+          sparks.splice(i, 1);
+          continue;
+        }
+        const cxp = sp.x * T + T / 2;
+        const cyp = sp.y * T + T / 2;
+        ctx.strokeStyle = `rgba(253,230,138,${(1 - age / 1.4).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(cxp, cyp, 4 + age * 22, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(255,255,240,${(1 - age / 1.4).toFixed(3)})`;
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2 + age * 2;
+          ctx.fillRect(Math.round(cxp + Math.cos(a) * (6 + age * 16)), Math.round(cyp + Math.sin(a) * (6 + age * 16) - age * 6), 1, 1);
+        }
+      }
 
       // 자동 걷기 목적지 — 깜박이는 도트 테두리
       if (pathRef.current.length && Math.floor(now / 250) % 2 === 0) {
@@ -658,20 +756,31 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
       vg.addColorStop(1, 'rgba(12,8,24,0.42)');
       ctx.fillStyle = vg;
       ctx.fillRect(0, 0, W, H);
+      // 지도를 옮겨 갈 때의 암전
+      if (fadeRef.current > 0) {
+        ctx.fillStyle = `rgba(8,6,12,${Math.min(1, fadeRef.current).toFixed(3)})`;
+        ctx.fillRect(0, 0, W, H);
+        fadeRef.current = Math.max(0, fadeRef.current - dt * 2.4);
+      }
 
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [view, terrain, fieldObjects, fog, map, clouds, smoke, backdropSrc, painted, veil]);
+  }, [view, terrain, fieldObjects, fog, map, clouds, smoke, backdropSrc, painted, veil, areaId]);
 
   const dayInt = Math.floor(j.day);
   const dayPct = Math.min(100, (j.day / j.maxDays) * 100);
   const here = poiHere(state);
   const onGate = atEntrance(state);
+  const gateLeg = gateHere(state);
+  const onExit = atAreaExit(state);
   const hereTile = tileAt(map, j.pos.x, j.pos.y);
+  const shownPois = poisOnMap(j).filter((p) => poiVisible(p, explored, map.w));
   // 바로 옆 칸의 장소 (아래 창에 이름으로 알려 준다)
-  const besides = j.pois.find((p) => !p.done && Math.abs(p.tx - j.pos.x) + Math.abs(p.ty - j.pos.y) === 1);
+  const besides = shownPois.find((p) => !p.done && Math.abs(p.tx - j.pos.x) + Math.abs(p.ty - j.pos.y) === 1);
+  const areaLeg = areaId ? getLeg(region, areaId) : null;
+  const canAct = !!(here || onGate || gateLeg || onExit);
 
   // 마우스가 가리키는 칸의 설명 — 지도 위 글자 대신 아래 창에
   const hoverInfo = (() => {
@@ -679,14 +788,16 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
     const legId = zoneLegAt(map, hover.x, hover.y);
     const tk = tileAt(map, hover.x, hover.y);
     if (!legId || !tk) return null;
-    const known = j.visitedLegs.includes(legId);
+    const known = explored ? !!explored[hover.y * map.w + hover.x] : j.visitedLegs.includes(legId);
     const zoneName = getLeg(region, legId).name;
-    const poi = j.pois.find((p) => p.tx === hover.x && p.ty === hover.y);
-    const gate = hover.x === map.entrance.x && hover.y === map.entrance.y;
-    if (gate) return '도장으로 돌아가는 길';
+    const poi = shownPois.find((p) => p.tx === hover.x && p.ty === hover.y);
+    const atDoor = hover.x === map.entrance.x && hover.y === map.entrance.y;
+    if (atDoor) return areaId ? '바깥 지도로 나가는 길' : '도장으로 돌아가는 길';
+    const gate = !areaId && map.gates?.find((g) => g.x === hover.x && g.y === hover.y);
+    if (gate) return `「${getLeg(region, gate.legId).name}」으로 들어가는 길목`;
     if (poi) return `${poi.label}${poi.done ? ' (다녀감)' : ''} · ${zoneName}`;
-    if (!known) return `${zoneName} — 아직 가 보지 않은 땅`;
-    return `${zoneName} · ${TILE_INFO[tk].name}${TILE_INFO[tk].pass ? ` (한 걸음 ${tileDays(tk, state.season)}일)` : ' — 지날 수 없다'}`;
+    if (!known) return areaId ? `${zoneName} — 아직 둘러보지 않은 곳` : `${zoneName} — 아직 가 보지 않은 땅`;
+    return `${zoneName} · ${TILE_INFO[tk].name}${TILE_INFO[tk].pass ? ` (한 걸음 ${stepDays(j, tk, state.season)}일)` : ' — 지날 수 없다'}`;
   })();
 
   const holdBtn = (dir: Dir) => ({
@@ -719,7 +830,7 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
               <div className="flex items-center gap-1 text-[11px] text-[#e6d8be] truncate">
                 <MapPin className="w-3 h-3 text-amber-400 shrink-0" />
                 <span className="font-bold truncate">
-                  {region.name}({region.hanja}) · {leg.name}
+                  {region.name}({region.hanja}) · {areaLeg ? areaLeg.name : `${leg.name} 근방 (전도)`}
                 </span>
               </div>
             </div>
@@ -754,7 +865,7 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
           </span>
           {hereTile && (
             <span className="shrink-0 text-[#c7b394] hidden sm:inline">
-              · {TILE_INFO[hereTile].name} (한 걸음 {tileDays(hereTile, state.season)}일)
+              · {TILE_INFO[hereTile].name} (한 걸음 {stepDays(j, hereTile, state.season)}일)
             </span>
           )}
         </div>
@@ -793,6 +904,16 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
                 </div>
                 <div className="mt-1 text-[11px] text-[#c7b394]">{leg.name}에서 길을 나선다</div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* 구역 이름 — 구역 지도에 들어설 때 */}
+        {areaBanner && !titleCard && !hasOverlay && (
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 pointer-events-none animate-region-title">
+            <div className="border-y-2 border-[#8c6239] bg-gradient-to-r from-transparent via-[#140d09]/90 to-transparent px-16 py-2 text-center">
+              <div className="text-xl sm:text-2xl font-bold text-[#fde68a] drop-shadow-[0_2px_0_#000]">{getLeg(region, areaBanner).name}</div>
+              <div className="text-[11px] text-[#c7b394]">{getLeg(region, areaBanner).hint}</div>
             </div>
           </div>
         )}
@@ -862,9 +983,9 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
             </button>
           </div>
           <button
-            disabled={(!here && !onGate) || blocked}
+            disabled={!canAct || blocked}
             onClick={interactHere}
-            className={`flex-1 min-w-0 h-[76px] px-2 font-bold text-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-default ${(here || onGate) && !blocked ? 'seal-badge' : 'rpg-btn disabled:opacity-90'}`}
+            className={`flex-1 min-w-0 h-[76px] px-2 font-bold text-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-default ${canAct && !blocked ? 'seal-badge' : 'rpg-btn disabled:opacity-90'}`}
           >
             {here ? (
               <>
@@ -872,6 +993,20 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
                 <span className="truncate">{here.label} 다시 살펴보기</span>
                 <span className="hidden sm:inline text-[10px] opacity-70">[E]</span>
               </>
+            ) : gateLeg ? (
+              <>
+                <LogIn className="w-4 h-4 shrink-0" />
+                <span className="truncate">「{getLeg(region, gateLeg).name}」으로 들어간다</span>
+                <span className="hidden sm:inline text-[10px] opacity-70">[E]</span>
+              </>
+            ) : onExit ? (
+              <>
+                <LogOut className="w-4 h-4 shrink-0" />
+                <span className="truncate">바깥 지도로 나간다</span>
+                <span className="hidden sm:inline text-[10px] opacity-70">[E · ↓]</span>
+              </>
+            ) : foundNote ? (
+              <span className="text-xs font-bold text-[#fde68a] truncate">숨은 곳을 찾았다 — 「{foundNote}」</span>
             ) : onGate ? (
               <>
                 <Home className="w-4 h-4 shrink-0" />
@@ -883,8 +1018,17 @@ export const JourneyView: React.FC<Props> = ({ state, hasOverlay, onSceneReady, 
               <span className="text-xs font-bold text-[#fde68a] truncate">바로 옆에 「{besides.label}」</span>
             ) : (
               <span className="text-[11px] sm:text-xs font-normal leading-snug text-center text-[#c7b394]">
-                방향키·WASD로 걷거나 땅을 눌러 목적지를 정한다.
-                <br className="hidden sm:inline" /> 머리 위에 「!」가 뜬 곳을 밟으면 사건이 일어난다.
+                {areaId ? (
+                  <>
+                    길에서 벗어난 막다른 곳, 숲속 빈터, 벼랑 너머에 무언가 숨어 있다.
+                    <br className="hidden sm:inline" /> 가까이 다가가면 드러난다. 출구에서 아래로 걸으면 바깥 지도로.
+                  </>
+                ) : (
+                  <>
+                    방향키·WASD로 걷거나 땅을 눌러 목적지를 정한다.
+                    <br className="hidden sm:inline" /> 붉은 깃발을 밟으면 그 땅 안으로 들어간다.
+                  </>
+                )}
               </span>
             )}
           </button>
